@@ -93,12 +93,57 @@ python3 hcp_session.py --yes --no-clipboard --out cookies/org.cookie
 
 `python3 hcp_session.py --help` lists the same flags.
 
+## Export jobs and job costs to CSV
+
+`hcp_export.py` pulls every job from the public API, then each job's costing materials and miscellaneous items from the private API. It needs no franchisor session: use your own API key and the `_housecall-web_session_with_domain` value from your own signed-in browser (copy it the same way as in step 1, without switching accounts).
+
+```bash
+python3 hcp_export.py --api-key-file ~/.config/hcp-private-api/api.key \
+  --session-cookie-file ~/.config/hcp-private-api/session.cookie
+```
+
+`HCP_API_KEY` and `HCP_SESSION_COOKIE` work too; with neither, the script prompts with hidden input.
+
+It writes these files to `exports/` (`--out` to change):
+
+| File | Contents |
+| --- | --- |
+| `jobs.csv` | One row per job: `job_id`, invoice number, status, customer, address, schedule and work times, money in dollars, employees, tags, job type |
+| `materials.csv` | One row per job input material, with `job_id` and `invoice_number` |
+| `miscellaneous_items.csv` | One row per miscellaneous item, with `job_id` and `invoice_number` |
+| `jobs.json` | The raw jobs from the public API |
+| `costs.jsonl` | The raw private API responses, one job per line |
+
+Requests start at least `--delay` seconds apart (default 0.1). Each job takes two requests. A `429` waits for `Retry-After`; a `5xx` or dropped connection retries with exponential backoff. A job whose costs still fail is left out of the cost CSVs and listed at the end.
+
+`costs.jsonl` doubles as progress. Rerunning into the same directory refetches the job list but only the job costs it doesn't have yet, so an expired cookie or Ctrl-C loses nothing. `--fresh` starts over; `--limit N` exports only the first N jobs for a trial run.
+
+## Chrome extension
+
+`extension/` is the same export packaged for people who shouldn't have to touch cookies: **HCP Job Costing Export for SHVR**. It runs in Chrome and Edge on Mac and Windows. The user pastes an API key once and signs in to Housecall Pro as usual. The extension then calls the private API with the browser's own session, so nobody copies a cookie.
+
+Clicking the toolbar icon opens a three-step page: API key, Housecall Pro sign-in, Export. The export runs in the service worker, so it keeps going while the tab is in the background. It spaces requests 0.1s apart (`DEFAULT_DELAY_MS` in `extension/lib/hcp.js`) and backs off on `429` and `5xx`, like `hcp_export.py`. Progress is kept per job in `chrome.storage.local`, so a closed tab or restarted browser resumes where it stopped. The result is one zip in Downloads holding `jobs.csv`, `materials.csv` and `miscellaneous_items.csv`, with the same columns as `hcp_export.py`. The CSVs start with a byte-order mark so Excel shows accents and dashes correctly.
+
+| Path | Role |
+| --- | --- |
+| `extension/lib/hcp.js` | Housecall Pro client: throttle, retries, signed-out detection |
+| `extension/lib/exporter.js` | Resumable export run and zip assembly |
+| `extension/lib/rows.js`, `extension/lib/zip.js` | CSV rows and a small stored-zip writer |
+| `extension/background.js` | Service worker: runs the export, saves the zip, opens the page |
+| `extension/app.html`, `app.js`, `app.css` | The page users see |
+
+Try it locally: open `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and choose `extension/`.
+
+Ship it: bump `version` in `extension/manifest.json`, run `npm run package` to build `dist/hcp-job-costing-export-<version>.zip`, and upload that to the Chrome Web Store as an unlisted item. `store/LISTING.md` has the listing text, permission justifications and data disclosures. `store/PRIVACY.md` is the privacy policy to host publicly. `store/*.png` are the listing screenshots.
+
 ## Tests
 
 ```bash
-python3 -m unittest test_hcp_session.py
+npm test
 ```
+
+That runs the extension tests (`node --test tests/extension/*.test.mjs`) and the Python tests.
 
 ## Secrets
 
-Cookie files and API keys stay out of git. `cookies/`, `*.cookie`, and `.env` are ignored. The saved franchisor session lives in your home directory, not in this repo.
+Cookie files and API keys stay out of git. `cookies/`, `*.cookie`, `*.key`, `exports/`, and `.env` are ignored. The saved franchisor session lives in your home directory, not in this repo.

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HCP Job Costing Export</title>
+    <link rel="icon" href="icons/icon-32.png" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <svg width="0" height="0" class="sprite" aria-hidden="true">
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M17 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4" /></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" /></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4.5v10M7.5 10.5l4.5 4.5 4.5-4.5M5 19.5h14" /></symbol>
+    </svg>
+
+    <main class="shell">
+      <header class="masthead">
+        <img src="icons/icon-128.png" alt="" width="56" height="56" />
+        <div>
+          <h1>Job Costing Export</h1>
+          <p>Download every Housecall Pro job with its materials and miscellaneous costs, ready to open in Excel or Google Sheets.</p>
+        </div>
+      </header>
+
+      <ol class="steps">
+        <!-- Step 1: API key -->
+        <li class="step" id="step-key" data-state="current">
+          <span class="marker" aria-hidden="true"><span class="num">1</span><svg class="icon"><use href="#i-check" /></svg></span>
+          <div class="step-body">
+            <h2>Add your API key</h2>
+
+            <div data-view="form">
+              <p>In Housecall Pro, go to <b>My Apps</b> › <b>All Apps</b> › <b>API Key Management</b>. Click <b>Generate API Key</b>, choose <b>Read-only</b>, then copy the key and paste it here.</p>
+              <p class="hint">Only an admin can make an API key, and your plan needs to include the API (MAX plan).</p>
+              <form id="key-form" class="key-form" autocomplete="off">
+                <label for="key-input">API key</label>
+                <div class="field-row">
+                  <input id="key-input" name="key" type="text" spellcheck="false" autocapitalize="off" placeholder="Paste your API key" required />
+                  <button type="submit" class="btn primary" id="key-save">Save key</button>
+                </div>
+                <p class="message error" id="key-error" role="alert" hidden></p>
+              </form>
+            </div>
+
+            <div data-view="saved" hidden>
+              <p>Connected to <strong id="company-name"></strong>.</p>
+              <button type="button" class="link" id="key-change">Use a different key</button>
+            </div>
+          </div>
+        </li>
+
+        <!-- Step 2: Housecall Pro sign-in -->
+        <li class="step" id="step-session" data-state="waiting">
+          <span class="marker" aria-hidden="true"><span class="num">2</span><svg class="icon"><use href="#i-check" /></svg></span>
+          <div class="step-body">
+            <h2>Sign in to Housecall Pro</h2>
+            <p data-view="checking" hidden><span class="spinner" aria-hidden="true"></span> Checking…</p>
+            <p data-view="ok" hidden>You're signed in to Housecall Pro in this browser.</p>
+            <div data-view="signed-out" hidden>
+              <p>Sign in to Housecall Pro in this browser, then come back to this tab. It notices on its own.</p>
+              <button type="button" class="btn" id="open-hcp">Open Housecall Pro<svg class="icon"><use href="#i-external" /></svg></button>
+            </div>
+            <div data-view="unreachable" hidden>
+              <p class="message error">Couldn't reach Housecall Pro. Check your internet connection.</p>
+              <button type="button" class="btn" id="session-retry">Check again</button>
+            </div>
+            <p data-view="pending" class="muted">Add your API key first.</p>
+          </div>
+        </li>
+
+        <!-- Step 3: Export -->
+        <li class="step" id="step-export" data-state="waiting">
+          <span class="marker" aria-hidden="true"><span class="num">3</span><svg class="icon"><use href="#i-check" /></svg></span>
+          <div class="step-body">
+            <h2>Export</h2>
+
+            <p data-view="pending" class="muted">Finish the steps above first.</p>
+
+            <div data-view="ready" hidden>
+              <p>This reads your jobs one at a time, so a large account can take several minutes. You'll get one zip file with three spreadsheets: jobs, materials, and miscellaneous items.</p>
+              <button type="button" class="btn primary big" id="start">
+                <svg class="icon"><use href="#i-download" /></svg>Export my job costs
+              </button>
+            </div>
+
+            <div data-view="running" hidden>
+              <p class="status" id="run-status">Starting…</p>
+              <div class="bar" role="progressbar" id="run-bar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="run-status">
+                <span class="fill"></span>
+              </div>
+              <p class="eta" id="run-eta"></p>
+              <p class="notice" id="run-notice" hidden></p>
+              <p class="hint">Keep this tab open until it finishes. You can use other tabs in the meantime.</p>
+              <button type="button" class="btn quiet" id="cancel">Stop</button>
+            </div>
+
+            <div data-view="done" hidden>
+              <p class="done-line"><svg class="icon ok"><use href="#i-check" /></svg><span>Done. Your spreadsheets are in your <b>Downloads</b> folder.</span></p>
+              <p class="file" id="done-file"></p>
+              <p class="summary" id="done-summary"></p>
+              <div class="actions">
+                <button type="button" class="btn primary" id="show-file"><svg class="icon"><use href="#i-folder" /></svg>Show in folder</button>
+                <button type="button" class="btn" id="download-again">Download again</button>
+              </div>
+              <div class="failed" id="failed" hidden>
+                <p class="message error"><svg class="icon"><use href="#i-alert" /></svg><span id="failed-text"></span></p>
+                <button type="button" class="btn" id="retry-failed">Try those jobs again</button>
+                <details>
+                  <summary>Show which jobs</summary>
+                  <ul id="failed-list"></ul>
+                </details>
+              </div>
+              <button type="button" class="link" id="start-over">Start a new export</button>
+            </div>
+
+            <div data-view="error" hidden>
+              <p class="message error"><svg class="icon"><use href="#i-alert" /></svg><span id="error-text"></span></p>
+              <div class="actions">
+                <button type="button" class="btn primary" id="error-action">Try again</button>
+                <button type="button" class="link" id="error-start-over">Start over</button>
+              </div>
+            </div>
+
+            <div data-view="canceled" hidden>
+              <p>Export stopped. Nothing was downloaded.</p>
+              <button type="button" class="btn primary" id="start-again">Start again</button>
+            </div>
+          </div>
+        </li>
+      </ol>
+
+      <footer class="foot">Your data goes only between this browser and Housecall Pro. Nothing is sent anywhere else.</footer>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
