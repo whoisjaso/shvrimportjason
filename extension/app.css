@@ -32,6 +32,11 @@ body {
   font: inherit;
 }
 
+::selection {
+  background: var(--green-soft);
+  color: var(--green-deep);
+}
+
 .sprite {
   position: absolute;
 }
