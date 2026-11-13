@@ -14,13 +14,15 @@ Paste these into the developer dashboard at <https://chrome.google.com/webstore/
 
 > Get all of your Housecall Pro job costing out in one go.
 >
-> Job Costing Export reads every job in your Housecall Pro account, along with each job's materials and miscellaneous costs, and saves them as one zip file of three spreadsheets:
+> Job Costing Export reads every job and estimate in your Housecall Pro account, along with each job's materials and miscellaneous costs, and saves them as one zip file of spreadsheets:
 >
 > • jobs.csv: every job with its invoice number, status, customer, address, dates, totals, and assigned employees
 > • materials.csv: every material on every job, with quantity, unit cost, total, vendor, and purchase status
 > • miscellaneous_items.csv: every miscellaneous cost on every job, such as subcontractor labor
+> • estimates.csv: every estimate with its number, status, customer, address, dates, and assigned employees
+> • estimate_options.csv: every option on every estimate, with its total and approval status
 >
-> Each material and miscellaneous row includes the job ID and invoice number, so it links straight back to its job.
+> Each material and miscellaneous row includes the job ID and invoice number, so it links straight back to its job. Each job's original estimate ID matches an option ID in estimate_options.csv.
 >
 > How it works:
 > 1. Paste your Housecall Pro API key (My Apps › All Apps › API Key Management). A read-only key is enough.

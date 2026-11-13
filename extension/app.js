@@ -65,11 +65,12 @@ function renderProgress(run) {
   let status = "Starting…";
   let eta = "";
   if (run.status === "listing") {
+    const what = run.listing === "estimates" ? "estimates" : "job list";
     if (run.totalPages) {
-      status = `Getting your job list (page ${run.page} of ${run.totalPages})`;
+      status = `Getting your ${what} (page ${run.page} of ${run.totalPages})`;
       percent = (run.page / run.totalPages) * 100;
     } else {
-      status = run.page ? `Getting your job list (page ${run.page})` : "Connecting to Housecall Pro…";
+      status = run.page ? `Getting your ${what} (page ${run.page})` : "Connecting to Housecall Pro…";
     }
   } else {
     status = `Reading job costs: ${fmt(run.done)} of ${fmt(run.total)} jobs`;
@@ -106,7 +107,8 @@ function estimate(run) {
 
 function renderDone(run) {
   $("done-file").textContent = run.fileName || "";
-  $("done-summary").textContent = `${fmt(run.done)} of ${fmt(run.total)} jobs exported.`;
+  const estimates = run.estimates === undefined ? "" : ` and ${fmt(run.estimates)} estimates`;
+  $("done-summary").textContent = `${fmt(run.done)} of ${fmt(run.total)} jobs${estimates} exported.`;
   const failed = run.failed ?? [];
   $("failed").hidden = failed.length === 0;
   if (failed.length) {

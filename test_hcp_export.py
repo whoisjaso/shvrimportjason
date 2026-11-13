@@ -56,6 +56,21 @@ MATERIALS = {
     "job_c": [{"uuid": "jim_2", "name": "Tape", "quantity": "1.0", "unit_cost": 350}],
 }
 
+ESTIMATES = [
+    {
+        "id": "csr_1",
+        "estimate_number": "2001",
+        "customer": {"first_name": "Ada", "last_name": "Lovelace"},
+        "estimate_fields": {"job_type": {"name": "Exterior"}, "business_unit": None},
+        "options": [
+            {"id": "est_1", "option_number": "2001", "total_amount": 450000, "approval_status": "approved"},
+            {"id": "est_2", "option_number": "2002", "total_amount": 0, "approval_status": None},
+        ],
+    },
+    {"id": "csr_2", "estimate_number": "2003", "options": []},
+    {"id": "csr_3", "estimate_number": "2004"},
+]
+
 MISC = {
     "job_a": [{"uuid": "mcli_1", "name": "Sub labor", "unit_cost": 25000, "qty_in_hundredths": 150, "quantity": 1.5}],
     "job_b": [{"uuid": "mcli_2", "name": "Dump fee", "unit_cost": 4000, "quantity": 1.0}],
@@ -83,12 +98,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if url.path == "/company":
             return self._json(200, {"id": "org_1", "name": "T1P Richmond"})
-        if url.path == "/jobs":
+        if url.path in ("/jobs", "/estimates"):
+            resource = url.path[1:]
+            records = JOBS if resource == "jobs" else ESTIMATES
             page = int(query["page"][0])
             size = int(query["page_size"][0])
-            chunk = JOBS[(page - 1) * size : page * size]
-            pages = -(-len(JOBS) // size)
-            return self._json(200, {"jobs": chunk, "page": page, "total_pages": pages})
+            chunk = records[(page - 1) * size : page * size]
+            pages = -(-len(records) // size)
+            return self._json(200, {resource: chunk, "page": page, "total_pages": pages})
         if url.path == "/alpha/job_costing/job_input_materials":
             job_id = query["job_uuid"][0]
             if job_id in Handler.state["rate_limit_once"]:
@@ -187,6 +204,17 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(
             [(row["job_id"], row["quantity"], row["unit_cost"], row["total_cost"]) for row in misc],
             [("job_a", "1.5", "250.00", "375.00"), ("job_b", "1", "40.00", "40.00")],
+        )
+
+        estimates = read_csv(self.out / "estimates.csv")
+        self.assertEqual(
+            [(row["estimate_id"], row["customer_name"], row["job_type"], row["option_count"]) for row in estimates],
+            [("csr_1", "Ada Lovelace", "Exterior", "2"), ("csr_2", "", "", "0"), ("csr_3", "", "", "0")],
+        )
+        options = read_csv(self.out / "estimate_options.csv")
+        self.assertEqual(
+            [(row["estimate_id"], row["option_id"], row["total_amount"], row["approval_status"]) for row in options],
+            [("csr_1", "est_1", "4500.00", "approved"), ("csr_1", "est_2", "0.00", "")],
         )
 
     def test_failed_job_is_left_out_and_fetched_alone_on_rerun(self):

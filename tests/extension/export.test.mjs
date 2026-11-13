@@ -140,7 +140,27 @@ const JOBS = [
   { id: "job_c", invoice_number: "1003" },
 ];
 
-function fakeClient({ costFailures = {}, pages = [JOBS.slice(0, 2), JOBS.slice(2)], session = true } = {}) {
+const ESTIMATES = [
+  {
+    id: "csr_1",
+    estimate_number: "2001",
+    work_status: "scheduled",
+    customer: { first_name: "Ada", last_name: "Lovelace" },
+    estimate_fields: { job_type: { name: "Exterior" }, business_unit: null },
+    options: [
+      { id: "est_1", option_number: "2001", name: "Option #1", total_amount: 450000, approval_status: "approved" },
+      { id: "est_2", option_number: "2002", name: "Option #2", total_amount: 0, approval_status: null },
+    ],
+  },
+  { id: "csr_2", estimate_number: "2003", options: [] },
+];
+
+function fakeClient({
+  costFailures = {},
+  pages = [JOBS.slice(0, 2), JOBS.slice(2)],
+  estimatePages = [ESTIMATES.slice(0, 1), ESTIMATES.slice(1)],
+  session = true,
+} = {}) {
   const fetched = [];
   return {
     fetched,
@@ -149,7 +169,10 @@ function fakeClient({ costFailures = {}, pages = [JOBS.slice(0, 2), JOBS.slice(2
       checkSession: async () => {
         if (!session) throw new AuthError("session", "signed out");
       },
-      jobsPage: async (page) => ({ jobs: pages[page - 1] ?? [], totalPages: pages.length }),
+      listPage: async (resource, page) => {
+        const source = resource === "jobs" ? pages : estimatePages;
+        return { records: source[page - 1] ?? [], totalPages: source.length };
+      },
       materials: async (jobId) => {
         fetched.push(jobId);
         const failure = costFailures[jobId];
@@ -172,7 +195,7 @@ function unzip(bytes, member) {
   return execFileSync("unzip", ["-p", path, member], { encoding: "utf8" });
 }
 
-test("a full export lists every page, links costs to jobs, and zips three CSVs", async () => {
+test("a full export lists every page of jobs and estimates, links costs to jobs, and zips the CSVs", async () => {
   const store = memoryStore({ apiKey: "k" });
   const fake = fakeClient();
   let finishedRun = null;
@@ -186,6 +209,7 @@ test("a full export lists every page, links costs to jobs, and zips three CSVs",
   assert.equal(finishedRun.total, 3);
   assert.equal(finishedRun.done, 3);
   assert.equal(finishedRun.company, "T1P Richmond");
+  assert.equal(finishedRun.estimates, 2);
 
   const { bytes, fileName } = await exporter.archive();
   assert.equal(fileName, "HCP Job Costing Export - T1P Richmond - 2026-11-12.zip");
@@ -194,6 +218,15 @@ test("a full export lists every page, links costs to jobs, and zips three CSVs",
   assert.equal(jobs.length, 5); // header, 3 jobs, trailing newline
   assert.equal(unzip(bytes, "materials.csv").split("\r\n")[1].split(",").slice(0, 3).join(","), "job_a,1001,jim_1");
   assert.equal(unzip(bytes, "miscellaneous_items.csv"), `\uFEFF${MISC_COLUMNS.join(",")}\r\njob_b,1002,mcli_1,Sub,,1,40.00,40.00\r\n`);
+
+  const estimates = unzip(bytes, "estimates.csv").split("\r\n");
+  assert.match(estimates[1], /^csr_1,2001,scheduled,,Ada Lovelace,/);
+  assert.match(estimates[1], /,Exterior,,2$/);
+  assert.match(estimates[2], /^csr_2,2003,.*,0$/);
+  assert.deepEqual(unzip(bytes, "estimate_options.csv").split("\r\n").slice(1, 3), [
+    "csr_1,2001,est_1,2001,Option #1,4500.00,approved,,,,,",
+    "csr_1,2001,est_2,2002,Option #2,0.00,,,,,,",
+  ]);
 });
 
 test("an interrupted export resumes without refetching finished jobs", async () => {

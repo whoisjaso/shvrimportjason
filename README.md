@@ -111,7 +111,9 @@ It writes these files to `exports/` (`--out` to change):
 | `jobs.csv` | One row per job: `job_id`, invoice number, status, customer, address, schedule and work times, money in dollars, employees, tags, job type |
 | `materials.csv` | One row per job input material, with `job_id` and `invoice_number` |
 | `miscellaneous_items.csv` | One row per miscellaneous item, with `job_id` and `invoice_number` |
-| `jobs.json` | The raw jobs from the public API |
+| `estimates.csv` | One row per estimate (`estimate_id` is `csr_…`) |
+| `estimate_options.csv` | One row per estimate option; `option_id` (`est_…`) matches a job's `original_estimate_id` |
+| `jobs.json`, `estimates.json` | The raw jobs and estimates from the public API |
 | `costs.jsonl` | The raw private API responses, one job per line |
 
 Requests start at least `--delay` seconds apart (default 0.1). Each job takes two requests. A `429` waits for `Retry-After`; a `5xx` or dropped connection retries with exponential backoff. A job whose costs still fail is left out of the cost CSVs and listed at the end.

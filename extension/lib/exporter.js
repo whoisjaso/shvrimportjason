@@ -1,13 +1,27 @@
-// The export run: list every job, then fetch each job's costs one at a
-// time. Progress lives in storage under these keys, so the run survives the
-// service worker being stopped and picks up where it left off:
+// The export run: list every job and estimate, then fetch each job's costs
+// one at a time. Progress lives in storage under these keys, so the run
+// survives the service worker being stopped and picks up where it left off:
 //
-//   run          status and counters the app page renders
-//   jobs         job rows, in Housecall Pro's order
-//   cost:<id>    { materials, misc } rows for one finished job
+//   run              status and counters the app page renders
+//   jobs             job rows, in Housecall Pro's order
+//   estimates        estimate rows
+//   estimateOptions  estimate option rows
+//   cost:<id>        { materials, misc } rows for one finished job
 
 import { AuthError, JOBS_PAGE_SIZE, RequestError } from "./hcp.js";
-import { JOB_COLUMNS, MATERIAL_COLUMNS, MISC_COLUMNS, jobRow, materialRow, miscRow, toCsv } from "./rows.js";
+import {
+  ESTIMATE_COLUMNS,
+  ESTIMATE_OPTION_COLUMNS,
+  JOB_COLUMNS,
+  MATERIAL_COLUMNS,
+  MISC_COLUMNS,
+  estimateOptionRows,
+  estimateRow,
+  jobRow,
+  materialRow,
+  miscRow,
+  toCsv,
+} from "./rows.js";
 import { makeZip } from "./zip.js";
 
 export const ACTIVE = new Set(["listing", "costs"]);
@@ -30,7 +44,7 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
 
   async function clearRunData() {
     const { jobs } = await store.get("jobs");
-    const keys = ["run", "jobs", ...(jobs ?? []).map((job) => COST_PREFIX + job.job_id)];
+    const keys = ["run", "jobs", "estimates", "estimateOptions", ...(jobs ?? []).map((job) => COST_PREFIX + job.job_id)];
     await store.remove(keys);
   }
 
@@ -44,23 +58,35 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
       },
     });
 
+    // Every record of "jobs" or "estimates", page by page; null when canceled.
+    async function listAll(resource) {
+      const records = [];
+      for (let page = 1; ; page += 1) {
+        const { records: batch, totalPages } = await client.listPage(resource, page);
+        records.push(...batch);
+        run = await writeRun({ ...run, listing: resource, page, totalPages, notice: null });
+        if (cancelRequested) return null;
+        if (!batch.length) return records;
+        if (totalPages !== null ? page >= totalPages : batch.length < JOBS_PAGE_SIZE) return records;
+      }
+    }
+
     try {
       if (run.status === "listing") {
         const company = await client.company();
         run = await writeRun({ ...run, company: company.name || company.business_name || "" });
         await client.checkSession();
 
-        const jobs = [];
-        for (let page = 1; ; page += 1) {
-          const { jobs: records, totalPages } = await client.jobsPage(page);
-          jobs.push(...records.map(jobRow).filter((job) => job.job_id));
-          run = await writeRun({ ...run, page, totalPages, notice: null });
-          if (cancelRequested) return await writeRun({ ...run, status: "canceled" });
-          if (!records.length) break;
-          if (totalPages !== null ? page >= totalPages : records.length < JOBS_PAGE_SIZE) break;
-        }
-        run = { ...run, status: "costs", total: jobs.length, done: 0, failed: [] };
-        await writeRun(run, { jobs });
+        const jobRecords = await listAll("jobs");
+        if (!jobRecords) return await writeRun({ ...run, status: "canceled" });
+        const estimateRecords = await listAll("estimates");
+        if (!estimateRecords) return await writeRun({ ...run, status: "canceled" });
+
+        const jobs = jobRecords.map(jobRow).filter((job) => job.job_id);
+        const estimates = estimateRecords.map(estimateRow).filter((estimate) => estimate.estimate_id);
+        const estimateOptions = estimateRecords.flatMap(estimateOptionRows);
+        run = { ...run, status: "costs", total: jobs.length, estimates: estimates.length, done: 0, failed: [] };
+        await writeRun(run, { jobs, estimates, estimateOptions });
       }
 
       const { jobs } = await store.get("jobs");
@@ -161,7 +187,7 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
     // The finished export as one zip: { bytes, fileName }.
     async archive() {
       const run = await readRun();
-      const { jobs } = await store.get("jobs");
+      const { jobs, estimates = [], estimateOptions = [] } = await store.get(["jobs", "estimates", "estimateOptions"]);
       const costs = await store.get(jobs.map((job) => COST_PREFIX + job.job_id));
       const finished = jobs.map((job) => costs[COST_PREFIX + job.job_id]).filter(Boolean);
       const stamp = new Date(run.finishedAt ?? now());
@@ -170,6 +196,8 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
           { name: "jobs.csv", data: toCsv(JOB_COLUMNS, jobs) },
           { name: "materials.csv", data: toCsv(MATERIAL_COLUMNS, finished.flatMap((cost) => cost.materials)) },
           { name: "miscellaneous_items.csv", data: toCsv(MISC_COLUMNS, finished.flatMap((cost) => cost.misc)) },
+          { name: "estimates.csv", data: toCsv(ESTIMATE_COLUMNS, estimates) },
+          { name: "estimate_options.csv", data: toCsv(ESTIMATE_OPTION_COLUMNS, estimateOptions) },
         ],
         stamp,
       );

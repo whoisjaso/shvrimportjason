@@ -1,4 +1,4 @@
-// Spreadsheet rows for the three CSVs. Money arrives in cents and leaves in
+// Spreadsheet rows for the export CSVs. Money arrives in cents and leaves in
 // dollars; every cost row carries its job's id and invoice number.
 
 export const JOB_COLUMNS = [
@@ -99,6 +99,106 @@ export function jobRow(job) {
     original_estimate_id: text(job.original_estimate_id),
     recurrence_rule: text(job.recurrence_rule),
   };
+}
+
+export const ESTIMATE_COLUMNS = [
+  "estimate_id",
+  "estimate_number",
+  "work_status",
+  "customer_id",
+  "customer_name",
+  "customer_company",
+  "customer_email",
+  "customer_mobile",
+  "street",
+  "street_line_2",
+  "city",
+  "state",
+  "zip",
+  "scheduled_start",
+  "scheduled_end",
+  "on_my_way_at",
+  "started_at",
+  "completed_at",
+  "created_at",
+  "updated_at",
+  "assigned_employees",
+  "assigned_employee_ids",
+  "lead_source",
+  "job_type",
+  "business_unit",
+  "option_count",
+];
+
+// One row per estimate option. option_id ("est_…") is what a job's
+// original_estimate_id points at.
+export const ESTIMATE_OPTION_COLUMNS = [
+  "estimate_id",
+  "estimate_number",
+  "option_id",
+  "option_number",
+  "name",
+  "total_amount",
+  "approval_status",
+  "approval_status_updated_at",
+  "status",
+  "tags",
+  "created_at",
+  "updated_at",
+];
+
+export function estimateRow(estimate) {
+  const customer = isObject(estimate.customer) ? estimate.customer : {};
+  const employees = (Array.isArray(estimate.assigned_employees) ? estimate.assigned_employees : []).filter(isObject);
+  return {
+    estimate_id: text(estimate.id),
+    estimate_number: text(estimate.estimate_number),
+    work_status: text(estimate.work_status),
+    customer_id: text(customer.id),
+    customer_name: fullName(customer),
+    customer_company: text(customer.company),
+    customer_email: text(customer.email),
+    customer_mobile: text(customer.mobile_number),
+    street: dig(estimate, "address", "street"),
+    street_line_2: dig(estimate, "address", "street_line_2"),
+    city: dig(estimate, "address", "city"),
+    state: dig(estimate, "address", "state"),
+    zip: dig(estimate, "address", "zip"),
+    scheduled_start: dig(estimate, "schedule", "scheduled_start"),
+    scheduled_end: dig(estimate, "schedule", "scheduled_end"),
+    on_my_way_at: dig(estimate, "work_timestamps", "on_my_way_at"),
+    started_at: dig(estimate, "work_timestamps", "started_at"),
+    completed_at: dig(estimate, "work_timestamps", "completed_at"),
+    created_at: text(estimate.created_at),
+    updated_at: text(estimate.updated_at),
+    assigned_employees: join(employees.map(fullName)),
+    assigned_employee_ids: join(employees.map((employee) => employee.id)),
+    lead_source: text(estimate.lead_source),
+    job_type: dig(estimate, "estimate_fields", "job_type", "name"),
+    business_unit: dig(estimate, "estimate_fields", "business_unit", "name"),
+    option_count: String(estimateOptions(estimate).length),
+  };
+}
+
+export function estimateOptionRows(estimate) {
+  return estimateOptions(estimate).map((option) => ({
+    estimate_id: text(estimate.id),
+    estimate_number: text(estimate.estimate_number),
+    option_id: text(option.id),
+    option_number: text(option.option_number),
+    name: text(option.name),
+    total_amount: dollars(option.total_amount),
+    approval_status: text(option.approval_status),
+    approval_status_updated_at: text(option.approval_status_updated_at),
+    status: text(option.status),
+    tags: join(Array.isArray(option.tags) ? option.tags : []),
+    created_at: text(option.created_at),
+    updated_at: text(option.updated_at),
+  }));
+}
+
+function estimateOptions(estimate) {
+  return (Array.isArray(estimate.options) ? estimate.options : []).filter(isObject);
 }
 
 export function materialRow(jobId, invoiceNumber, material) {

@@ -137,16 +137,16 @@ export function createClient({
       return body && typeof body === "object" ? body : {};
     },
 
-    // One page of jobs: { jobs, totalPages }. totalPages is null when the
-    // response doesn't say; then a short page is the last one.
-    async jobsPage(page) {
+    // One page of "jobs" or "estimates": { records, totalPages }. totalPages
+    // is null when the response doesn't say; then a short page is the last one.
+    async listPage(resource, page) {
       const query = new URLSearchParams({ page: String(page), page_size: String(JOBS_PAGE_SIZE) });
-      const body = await getPublic(`/jobs?${query}`);
-      const records = Array.isArray(body?.jobs) ? body.jobs : body?.data;
-      if (!Array.isArray(records)) throw new RequestError("The jobs list came back empty-handed.");
+      const body = await getPublic(`/${resource}?${query}`);
+      const records = Array.isArray(body?.[resource]) ? body[resource] : body?.data;
+      if (!Array.isArray(records)) throw new RequestError(`The ${resource} list came back empty-handed.`);
       const total = Number.isInteger(body.total_pages) ? body.total_pages : body.meta?.total_pages;
       return {
-        jobs: records.filter((record) => record && typeof record === "object"),
+        records: records.filter((record) => record && typeof record === "object"),
         totalPages: Number.isInteger(total) ? total : null,
       };
     },

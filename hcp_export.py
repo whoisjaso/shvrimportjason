@@ -115,6 +115,52 @@ MISC_COLUMNS = [
     "total_cost",
 ]
 
+ESTIMATE_COLUMNS = [
+    "estimate_id",
+    "estimate_number",
+    "work_status",
+    "customer_id",
+    "customer_name",
+    "customer_company",
+    "customer_email",
+    "customer_mobile",
+    "street",
+    "street_line_2",
+    "city",
+    "state",
+    "zip",
+    "scheduled_start",
+    "scheduled_end",
+    "on_my_way_at",
+    "started_at",
+    "completed_at",
+    "created_at",
+    "updated_at",
+    "assigned_employees",
+    "assigned_employee_ids",
+    "lead_source",
+    "job_type",
+    "business_unit",
+    "option_count",
+]
+
+# One row per estimate option. option_id ("est_…") is what a job's
+# original_estimate_id points at.
+ESTIMATE_OPTION_COLUMNS = [
+    "estimate_id",
+    "estimate_number",
+    "option_id",
+    "option_number",
+    "name",
+    "total_amount",
+    "approval_status",
+    "approval_status_updated_at",
+    "status",
+    "tags",
+    "created_at",
+    "updated_at",
+]
+
 
 class AuthError(SessionError):
     """A credential was rejected; stop the whole run."""
@@ -253,21 +299,28 @@ class Housecall:
 
     def jobs(self):
         """Yield every job, page by page."""
+        return self._paginate("jobs")
+
+    def estimates(self):
+        """Yield every estimate (with its options), page by page."""
+        return self._paginate("estimates")
+
+    def _paginate(self, resource: str):
         page = 1
         while True:
             query = urllib.parse.urlencode({"page": page, "page_size": JOBS_PAGE_SIZE})
-            body = self._public(f"/jobs?{query}")
+            body = self._public(f"/{resource}?{query}")
             if not isinstance(body, dict):
-                raise RequestError("The jobs response is not an object.")
-            records = body.get("jobs")
+                raise RequestError(f"The {resource} response is not an object.")
+            records = body.get(resource)
             if records is None:
                 records = body.get("data")
             if not isinstance(records, list):
-                raise RequestError("The jobs response has no jobs list.")
+                raise RequestError(f"The {resource} response has no {resource} list.")
             total_pages = body.get("total_pages")
             if not isinstance(total_pages, int) and isinstance(body.get("meta"), dict):
                 total_pages = body["meta"].get("total_pages")
-            note(f"Jobs page {page}" + (f" of {total_pages}" if isinstance(total_pages, int) else ""))
+            note(f"{resource.capitalize()} page {page}" + (f" of {total_pages}" if isinstance(total_pages, int) else ""))
             yield from (record for record in records if isinstance(record, dict))
             if not records:
                 return
@@ -471,6 +524,67 @@ def misc_row(job_id: str, invoice_number: str, item: dict) -> dict:
     }
 
 
+def _people(record: dict) -> list[dict]:
+    return [person for person in record.get("assigned_employees") or [] if isinstance(person, dict)]
+
+
+def _options(estimate: dict) -> list[dict]:
+    return [option for option in estimate.get("options") or [] if isinstance(option, dict)]
+
+
+def estimate_row(estimate: dict) -> dict:
+    customer = estimate.get("customer") if isinstance(estimate.get("customer"), dict) else {}
+    employees = _people(estimate)
+    return {
+        "estimate_id": estimate.get("id", ""),
+        "estimate_number": _get(estimate, "estimate_number"),
+        "work_status": _get(estimate, "work_status"),
+        "customer_id": _get(customer, "id"),
+        "customer_name": _full_name(customer),
+        "customer_company": _get(customer, "company"),
+        "customer_email": _get(customer, "email"),
+        "customer_mobile": _get(customer, "mobile_number"),
+        "street": _get(estimate, "address", "street"),
+        "street_line_2": _get(estimate, "address", "street_line_2"),
+        "city": _get(estimate, "address", "city"),
+        "state": _get(estimate, "address", "state"),
+        "zip": _get(estimate, "address", "zip"),
+        "scheduled_start": _get(estimate, "schedule", "scheduled_start"),
+        "scheduled_end": _get(estimate, "schedule", "scheduled_end"),
+        "on_my_way_at": _get(estimate, "work_timestamps", "on_my_way_at"),
+        "started_at": _get(estimate, "work_timestamps", "started_at"),
+        "completed_at": _get(estimate, "work_timestamps", "completed_at"),
+        "created_at": _get(estimate, "created_at"),
+        "updated_at": _get(estimate, "updated_at"),
+        "assigned_employees": _join(_full_name(e) for e in employees),
+        "assigned_employee_ids": _join(e.get("id") for e in employees),
+        "lead_source": _get(estimate, "lead_source"),
+        "job_type": _get(estimate, "estimate_fields", "job_type", "name"),
+        "business_unit": _get(estimate, "estimate_fields", "business_unit", "name"),
+        "option_count": len(_options(estimate)),
+    }
+
+
+def estimate_option_rows(estimate: dict) -> list[dict]:
+    return [
+        {
+            "estimate_id": estimate.get("id", ""),
+            "estimate_number": _get(estimate, "estimate_number"),
+            "option_id": _get(option, "id"),
+            "option_number": _get(option, "option_number"),
+            "name": _get(option, "name"),
+            "total_amount": dollars(option.get("total_amount")),
+            "approval_status": _get(option, "approval_status"),
+            "approval_status_updated_at": _get(option, "approval_status_updated_at"),
+            "status": _get(option, "status"),
+            "tags": _join(option.get("tags") or []),
+            "created_at": _get(option, "created_at"),
+            "updated_at": _get(option, "updated_at"),
+        }
+        for option in _options(estimate)
+    ]
+
+
 def write_csv(path: Path, columns: list[str], rows) -> int:
     count = 0
     tmp = path.with_name(path.name + ".tmp")
@@ -524,6 +638,16 @@ def export(client: Housecall, out_dir: Path, fresh: bool = False, limit: int | N
     (out_dir / "jobs.json").write_text(json.dumps(jobs), encoding="utf-8")
     count = write_csv(out_dir / "jobs.csv", JOB_COLUMNS, (job_row(job) for job in jobs))
     say(f"Wrote {count} jobs to {out_dir / 'jobs.csv'}")
+
+    estimates = list(client.estimates())
+    (out_dir / "estimates.json").write_text(json.dumps(estimates), encoding="utf-8")
+    count = write_csv(out_dir / "estimates.csv", ESTIMATE_COLUMNS, (estimate_row(e) for e in estimates))
+    options = write_csv(
+        out_dir / "estimate_options.csv",
+        ESTIMATE_OPTION_COLUMNS,
+        (row for e in estimates for row in estimate_option_rows(e)),
+    )
+    say(f"Wrote {count} estimates and {options} estimate options to {out_dir / 'estimates.csv'}")
 
     done = load_progress(progress_path)
     pending = [job for job in jobs if job.get("id") and job["id"] not in done]

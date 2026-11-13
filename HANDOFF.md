@@ -7,7 +7,7 @@ Read this before building the SHVR side. It covers what exists in this repo, wha
 | Piece | Path | State |
 | --- | --- | --- |
 | Franchisee cookie minting (original tool) | `hcp_session.py` | Unchanged. Only needed for franchisor-level access; the export doesn't use it. |
-| CLI export | `hcp_export.py` | Done. Writes `jobs.csv`, `materials.csv` and `miscellaneous_items.csv`, plus raw JSON, to `exports/`. |
+| CLI export | `hcp_export.py` | Done. Writes `jobs.csv`, `materials.csv`, `miscellaneous_items.csv`, `estimates.csv` and `estimate_options.csv`, plus raw JSON, to `exports/`. |
 | Chrome extension | `extension/` | Done and tested end to end. Not yet on the Chrome Web Store. |
 | Web Store submission kit | `store/LISTING.md`, `store/PRIVACY.md`, `store/screenshot-running.png` | Ready apart from the open items below. |
 | Tests | `tests/extension/*.test.mjs`, `test_hcp_export.py`, `test_hcp_session.py` | `npm test` runs all of them: 12 node tests and 24 Python tests, all passing. |
@@ -22,6 +22,7 @@ The audience is non-technical Housecall Pro operators. They can paste an API key
 - **Download name:** the zip saved as `HCP Job Costing Export - That 1 Painter Richmond - 2026-11-12.zip`.
 - **Worker restart:** I killed the service worker mid-export. The open page restarted it within 5s, and it continued from the next unfinished job.
 - **Request spacing:** lowered from 0.5s to 0.1s at the user's request, in both `extension/lib/hcp.js` (`DEFAULT_DELAY_MS`) and `hcp_export.py` (`DEFAULT_DELAY`). The 0.1s setting hasn't been through a full live run yet; the user was testing it themselves.
+- **Estimates (added after the handoff was first written):** a live CLI run at 0.1s spacing listed 1,860 estimates and 2,830 estimate options with no 429s. All 487 jobs with an `original_estimate_id` matched an `option_id` in `estimate_options.csv`. The extension writes the same two files into its zip; that path is covered by unit tests but hasn't had a live browser run yet.
 
 ## How it talks to Housecall Pro
 
@@ -40,7 +41,7 @@ The audience is non-technical Housecall Pro operators. They can paste an API key
 - **Wrong company:** the browser can be signed in to a different HCP company than the API key's, which matters for franchise multi-location users. The extension infers that only when the very first job's costs come back 403 or 404, and then shows a "switch company" error. This heuristic hasn't been checked live.
 - **Private API contract:** the shapes are documented in `~/Code/_kickback/costr/docs/HCP_API.md`, the Kickback costr repo. That repo's `app/clients/hcp_private_api_client.rb` covers the same endpoints, plus the write calls.
 
-## Data contract (the three CSVs)
+## Data contract (the export CSVs)
 
 All money is in dollars with two decimals; HCP sends cents. Every cost row carries `job_id` (the HCP job id, `job_…`) and `invoice_number`, so it joins back to `jobs.csv`. The extension's CSVs start with a UTF-8 byte-order mark and use CRLF line endings (for Excel); the CLI's have neither.
 
@@ -54,6 +55,12 @@ All money is in dollars with two decimals; HCP sends cents. Every cost row carri
   - `quantity` comes from `qty_in_hundredths / 100` when that field is present.
   - This account uses these rows for subcontractor labor (for example `Labor - Luis G`).
 
+- **`estimates.csv`:** `estimate_id, estimate_number, work_status, customer_id, customer_name, customer_company, customer_email, customer_mobile, street, street_line_2, city, state, zip, scheduled_start, scheduled_end, on_my_way_at, started_at, completed_at, created_at, updated_at, assigned_employees, assigned_employee_ids, lead_source, job_type, business_unit, option_count`
+  - `estimate_id` is the estimate itself (`csr_…`).
+- **`estimate_options.csv`:** `estimate_id, estimate_number, option_id, option_number, name, total_amount, approval_status, approval_status_updated_at, status, tags, created_at, updated_at`
+  - `option_id` (`est_…`) is what a job's `original_estimate_id` points at, so jobs join to estimates through this file.
+  - Both files come straight from `GET /estimates` (options are embedded in each estimate), so they add only one request per 100 estimates and no private API calls.
+
 `extension/lib/rows.js` and the row functions in `hcp_export.py` define the columns; keep the two in step.
 
 ## Extension architecture
@@ -63,7 +70,7 @@ flowchart LR
   page[app.html / app.js<br/>key, sign-in check, progress] -- runtime messages:<br/>start, resume, retry, cancel, download, showFile --> sw[background.js<br/>service worker]
   sw --> exp[lib/exporter.js<br/>resumable run]
   exp --> hcp[lib/hcp.js<br/>throttle + retries]
-  exp -- run, jobs, cost:&lt;job id&gt; --> store[(chrome.storage.local)]
+  exp -- run, jobs, estimates, estimateOptions, cost:&lt;job id&gt; --> store[(chrome.storage.local)]
   store -- onChanged --> page
   exp -- archive(): zip bytes --> sw
   sw -- chrome.downloads --> dl[Downloads/*.zip]
