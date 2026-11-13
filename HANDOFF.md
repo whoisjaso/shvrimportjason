@@ -1,0 +1,118 @@
+# Handoff: HCP job costing export → SHVR integration
+
+Read this before building the SHVR side. It covers what exists in this repo, what has been proven against a live Housecall Pro account, the data contract, and the seams an integration should use.
+
+## What exists
+
+| Piece | Path | State |
+| --- | --- | --- |
+| Franchisee cookie minting (original tool) | `hcp_session.py` | Unchanged. Only needed for franchisor-level access; the export doesn't use it. |
+| CLI export | `hcp_export.py` | Done. Writes `jobs.csv`, `materials.csv` and `miscellaneous_items.csv`, plus raw JSON, to `exports/`. |
+| Chrome extension | `extension/` | Done and tested end to end. Not yet on the Chrome Web Store. |
+| Web Store submission kit | `store/LISTING.md`, `store/PRIVACY.md`, `store/screenshot-running.png` | Ready apart from the open items below. |
+| Tests | `tests/extension/*.test.mjs`, `test_hcp_export.py`, `test_hcp_session.py` | `npm test` runs all of them: 12 node tests and 24 Python tests, all passing. |
+
+The audience is non-technical Housecall Pro operators. They can paste an API key, but they can't copy a browser cookie. That constraint is why the extension exists: it uses the browser's own Housecall Pro sign-in, so nobody handles the cookie.
+
+## Verified against a live account (That 1 Painter Richmond, org `70e6c270-ae4d-4ffc-ade9-91c71ee721ee`, 2026-11-12)
+
+- **CLI:** 609 jobs, 1,339 materials and 436 miscellaneous items. There were no failures and no 429s at 0.5s spacing.
+- **Extension:** loaded unpacked in Chrome for Testing. The zip held exactly the same row counts as the CLI.
+- **First-run states:** a bad key shows an error, a real key shows the company name, no HCP session shows the "Sign in" prompt, and signing in enables Export.
+- **Download name:** the zip saved as `HCP Job Costing Export - That 1 Painter Richmond - 2026-11-12.zip`.
+- **Worker restart:** I killed the service worker mid-export. The open page restarted it within 5s, and it continued from the next unfinished job.
+- **Request spacing:** lowered from 0.5s to 0.1s at the user's request, in both `extension/lib/hcp.js` (`DEFAULT_DELAY_MS`) and `hcp_export.py` (`DEFAULT_DELAY`). The 0.1s setting hasn't been through a full live run yet; the user was testing it themselves.
+
+## How it talks to Housecall Pro
+
+| Data | Request | Auth |
+| --- | --- | --- |
+| Company name and id | `GET https://api.housecallpro.com/company` | `Authorization: Token <API key>` |
+| Jobs | `GET https://api.housecallpro.com/jobs?page=N&page_size=100` (stop at `total_pages`) | API key |
+| Sign-in check | `GET https://pro.housecallpro.com/alpha/organization/job_line_item_details_settings` | Browser session cookie |
+| Materials | `GET https://pro.housecallpro.com/alpha/job_costing/job_input_materials?job_uuid=<job id>&expand[]=material_vendor&expand[]=material_purchase_status&expand[]=material_source` | Browser session cookie |
+| Miscellaneous items | `GET https://pro.housecallpro.com/alpha/jobs/<job id>/miscellaneous_items` | Browser session cookie |
+
+- **Session cookie:** `_housecall-web_session_with_domain` on `.housecallpro.com`. The extension never reads it. It calls `fetch(..., {credentials: "include", redirect: "manual"})` from extension pages and the service worker, and host permissions make Chrome attach it.
+- **Signed out:** the browser's fetch gets an `opaqueredirect` or a 401. A 200 with a non-JSON body also counts as signed out.
+- **API key access:** keys require HCP's MAX plan, and only an admin can create one (My Apps › All Apps › API Key Management). A read-only key is enough.
+- **Retries:** a 429 waits for `Retry-After` (default 5s, up to 6 retries). A 5xx or network error backs off 2, 4, 8 and 16s. A 401 stops the run.
+- **Wrong company:** the browser can be signed in to a different HCP company than the API key's, which matters for franchise multi-location users. The extension infers that only when the very first job's costs come back 403 or 404, and then shows a "switch company" error. This heuristic hasn't been checked live.
+- **Private API contract:** the shapes are documented in `~/Code/_kickback/costr/docs/HCP_API.md`, the Kickback costr repo. That repo's `app/clients/hcp_private_api_client.rb` covers the same endpoints, plus the write calls.
+
+## Data contract (the three CSVs)
+
+All money is in dollars with two decimals; HCP sends cents. Every cost row carries `job_id` (the HCP job id, `job_…`) and `invoice_number`, so it joins back to `jobs.csv`. The extension's CSVs start with a UTF-8 byte-order mark and use CRLF line endings (for Excel); the CLI's have neither.
+
+- **`jobs.csv`:** `job_id, invoice_number, description, work_status, customer_id, customer_name, customer_company, customer_email, customer_mobile, street, street_line_2, city, state, zip, scheduled_start, scheduled_end, on_my_way_at, started_at, completed_at, created_at, updated_at, canceled_at, deleted_at, subtotal, total_amount, outstanding_balance, assigned_employees, assigned_employee_ids, tags, lead_source, job_type, business_unit, original_estimate_id, recurrence_rule`
+  - Multi-valued fields are joined with `; `.
+- **`materials.csv`:** `job_id, invoice_number, material_uuid, name, part_number, description, quantity, unit_of_measure, unit_cost, total_cost, vendor, vendor_uuid, purchase_status, purchase_status_uuid, material_source, material_source_uuid, pricebook_material_uuid`
+  - `total_cost` is quantity × unit cost, rounded to the cent.
+  - On this account the vendor, purchase-status and source fields are empty.
+  - Material names often look like `SW New — Invoice #58025`, with the description `PO: <invoice number>`. These rows were written by Kickback's cost matching.
+- **`miscellaneous_items.csv`:** `job_id, invoice_number, item_uuid, name, description, quantity, unit_cost, total_cost`
+  - `quantity` comes from `qty_in_hundredths / 100` when that field is present.
+  - This account uses these rows for subcontractor labor (for example `Labor - Luis G`).
+
+`extension/lib/rows.js` and the row functions in `hcp_export.py` define the columns; keep the two in step.
+
+## Extension architecture
+
+```mermaid
+flowchart LR
+  page[app.html / app.js<br/>key, sign-in check, progress] -- runtime messages:<br/>start, resume, retry, cancel, download, showFile --> sw[background.js<br/>service worker]
+  sw --> exp[lib/exporter.js<br/>resumable run]
+  exp --> hcp[lib/hcp.js<br/>throttle + retries]
+  exp -- run, jobs, cost:&lt;job id&gt; --> store[(chrome.storage.local)]
+  store -- onChanged --> page
+  exp -- archive(): zip bytes --> sw
+  sw -- chrome.downloads --> dl[Downloads/*.zip]
+```
+
+- **Storage keys:**
+  - `apiKey` and `company`.
+  - `run`: status `listing | costs | done | error | canceled`, with counters, `failed[]`, `error.kind` (`api_key | session | wrong_company | other`) and `pace` for the time estimate.
+  - `jobs`: job rows.
+  - `cost:<job id>`: `{materials, misc}` rows.
+- **Service worker lifetime:** Chrome stops an idle worker after 30s. Long waits in `background.js` call an extension API every 10s to stay alive. If the worker dies anyway, the open page sends `resume` every 5s.
+- **No build step:** the extension is plain ES modules. `npm run package` zips `extension/` into `dist/` for upload.
+
+## Seams for the SHVR side
+
+I don't know what SHVR's system looks like. Settle that before choosing a seam:
+
+1. **Hand over the zip:** SHVR ingests the three CSVs the extension already produces. Nothing in this repo changes. The data contract above is the interface.
+2. **Push from the extension:** add a step after `exporter.archive()`, or read the rows from storage, and POST them to an SHVR endpoint. The natural hook is `onFinished` in `background.js` (it currently calls `saveArchive`). This needs:
+   - an SHVR host permission in `manifest.json`;
+   - a way to pair the user's install with their SHVR account (for example a pairing token the user pastes, alongside the API key);
+   - an update to `store/PRIVACY.md` and the Web Store data disclosures, which currently promise that nothing leaves the browser except to Housecall Pro.
+3. **Server-side pull:** SHVR calls HCP itself. The jobs need only the API key. The materials and miscellaneous items need a live browser session cookie, and SHVR's users can't supply one by hand. Kickback solved the same problem with a companion extension that reads the cookie through `chrome.cookies` and posts it to the platform (`~/Code/_kickback/costr/extension/`). Session cookies expire, so this needs a refresh story.
+
+Questions to answer first:
+- Which of these shapes does SHVR want?
+- Where does SHVR run, and does it have an API for receiving the data?
+- How do SHVR users map to HCP companies (one company each, or several locations)?
+- Should the export be incremental (only jobs changed since the last export) instead of a full pull every time? Today every run is a full pull.
+
+## Open items
+
+- [ ] Submit to the Chrome Web Store as unlisted. This needs a $5 developer account. Upload the zip from `npm run package`, and paste the text from `store/LISTING.md`.
+- [ ] Put a real contact email in `store/PRIVACY.md` (it has a placeholder), host it publicly (a Gist or GitHub Pages), and paste its URL into the listing.
+- [ ] Optional: add a second store screenshot of the "done" state.
+- [ ] Confirm a full live run at 0.1s spacing stays clear of 429s.
+- [ ] Check the wrong-company heuristic with a franchise user signed in to the wrong location.
+
+## Run and test
+
+```bash
+npm test                      # node extension tests + python tests
+npm run package               # dist/hcp-job-costing-export-<version>.zip
+python3 hcp_export.py --api-key-file ~/.config/hcp-private-api/api.key \
+  --session-cookie-file ~/.config/hcp-private-api/session.cookie   # CLI export
+```
+
+To try the extension locally, open `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and choose `extension/`.
+
+For a headless end-to-end run, use Chrome for Testing; Chrome stable ignores `--load-extension`. Launch it with `--load-extension=<repo>/extension --disable-extensions-except=<repo>/extension`, set the HCP cookie with CDP `Storage.setCookies` (domain `.housecallpro.com`), then open `chrome-extension://<id>/app.html`. Overriding downloads with `Browser.setDownloadBehavior` makes Chrome ignore the extension's file name and save `download.zip`; leave the download behavior at its default to check naming.
+
+Secrets stay out of git: `*.key`, `*.cookie`, `exports/`, `dist/` and `.env` are ignored.
