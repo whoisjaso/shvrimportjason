@@ -21,7 +21,7 @@ The audience is non-technical Housecall Pro operators. They can paste an API key
 - **First-run states:** a bad key shows an error, a real key shows the company name, no HCP session shows the "Sign in" prompt, and signing in enables Export.
 - **Download name:** the zip saved as `HCP Job Costing Export - That 1 Painter Richmond - 2026-11-12.zip`.
 - **Worker restart:** I killed the service worker mid-export. The open page restarted it within 5s, and it continued from the next unfinished job.
-- **Request spacing:** lowered from 0.5s to 0.1s at the user's request, in both `extension/lib/hcp.js` (`DEFAULT_DELAY_MS`) and `hcp_export.py` (`DEFAULT_DELAY`). The 0.1s setting hasn't been through a full live run yet; the user was testing it themselves.
+- **Request spacing:** lowered from 0.5s to 0.1s at the user's request, in both `extension/lib/hcp.js` (`DEFAULT_DELAY_MS`) and `hcp_export.py` (`DEFAULT_DELAY`). At 0.1s, the public API listing (7 pages of jobs, 19 of estimates) has run live with no 429s. The private per-job cost calls haven't had a full run at 0.1s yet; that run reused saved costs. The user is testing that themselves.
 - **Estimates (added after the handoff was first written):** a live CLI run at 0.1s spacing listed 1,860 estimates and 2,830 estimate options with no 429s. All 487 jobs with an `original_estimate_id` matched an `option_id` in `estimate_options.csv`. The extension writes the same two files into its zip; that path is covered by unit tests but hasn't had a live browser run yet.
 
 ## How it talks to Housecall Pro
