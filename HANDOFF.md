@@ -88,7 +88,7 @@ flowchart LR
 
 I don't know what SHVR's system looks like. Settle that before choosing a seam:
 
-1. **Hand over the zip:** SHVR ingests the three CSVs the extension already produces. Nothing in this repo changes. The data contract above is the interface.
+1. **Hand over the zip:** SHVR ingests the five CSVs the extension already produces. Nothing in this repo changes. The data contract above is the interface.
 2. **Push from the extension:** add a step after `exporter.archive()`, or read the rows from storage, and POST them to an SHVR endpoint. The natural hook is `onFinished` in `background.js` (it currently calls `saveArchive`). This needs:
    - an SHVR host permission in `manifest.json`;
    - a way to pair the user's install with their SHVR account (for example a pairing token the user pastes, alongside the API key);
