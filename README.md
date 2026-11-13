@@ -122,21 +122,27 @@ Requests start at least `--delay` seconds apart (default 0.1). Each job takes tw
 
 ## Chrome extension
 
-`extension/` is the same export packaged for people who shouldn't have to touch cookies: **HCP Job Costing Export for SHVR**. It runs in Chrome and Edge on Mac and Windows. The user pastes an API key once and signs in to Housecall Pro as usual. The extension then calls the private API with the browser's own session, so nobody copies a cookie.
+`extension/` is **SHVR Data Export**, a Chrome extension (Chrome and Edge, Mac and Windows) that downloads a company's records from the field-service software they use today so they can bring them to SHVR. It supports Housecall Pro and ServiceTitan, and new platforms plug in as another client and exporter beside those two. Users never copy a cookie: the extension uses the browser's own signed-in session. The page uses the SHVR look (shvr.app): its wordmark, palette, square corners, Plus Jakarta Sans and Inter (self-hosted in `extension/fonts/`).
 
 Clicking the toolbar icon opens a three-step page: API key, Housecall Pro sign-in, Export. The export runs in the service worker, so it keeps going while the tab is in the background. It spaces requests 0.1s apart (`DEFAULT_DELAY_MS` in `extension/lib/hcp.js`) and backs off on `429` and `5xx`, like `hcp_export.py`. Progress is kept per job in `chrome.storage.local`, so a closed tab or restarted browser resumes where it stopped. The result is one zip in Downloads holding `jobs.csv`, `materials.csv`, `miscellaneous_items.csv`, `estimates.csv` and `estimate_options.csv`, with the same columns as `hcp_export.py`. The CSVs start with a byte-order mark so Excel shows accents and dashes correctly.
 
+The page starts by asking which software the user has. Choosing **ServiceTitan** replaces the first two steps with a single sign-in step. ServiceTitan needs no API key. The extension finds the signed-in account (the "tenant") from ServiceTitan's cookies; if there are several, the user picks one. It then pages through `POST https://<tenant>.eh.go.servicetitan.com/Search/<Entity>` for Job, Estimate, Customer, Invoice, Lead and Payment, with the body `{"filter":{"page":N},"criteriaString":"{}"}`. Every record is kept whole: `extension/lib/flatten.js` turns nested fields into dotted columns, so each search becomes its own CSV with every field ServiceTitan returned. Each page is saved as it arrives, so an interrupted run resumes at the next page. A search stops when a page is empty, when it reaches the reported total, or when a page brings no records it hasn't already seen.
+
+ServiceTitan attachments come after the searches. Checked live on 2026-11-13: the attachment endpoints take an **estimate** id (a job id returns HTTP 500), so the exporter walks every estimate. `GET /app/api/fam/documentManagement/7/<estimateId>/documents?size=1000&startIndex=N` lists the estimate's job's documents and photos (`ownerType` 1 = job; page while `isLast` is false). `GET /app/api/fam/documentManagement/1/<estimateId>/measurements` lists measurement reports, which belong to the job's location (`ownerType` 2); each report has several files. Every file downloads from `GET /Attach/Job?name=<url-encoded filename or fileUrl>`. A file reached through several estimates is fetched once. Files go to IndexedDB (`extension/lib/blobs.js`) as they arrive; when the run finishes, the open page builds the zip from those Blobs (with ZIP64 for archives over 4 GB) and downloads it, because a service worker can't make a Blob URL. The zip holds `attachments/job <number>/documents/…` and `…/measurements/…`, and `attachments.csv` lists every file with its job, estimate, zip path, size, download status, and every field ServiceTitan returned (`info.*` columns). Jobs with no estimate get no attachments; on the test account that was 204 of 417 jobs.
+
 | Path | Role |
 | --- | --- |
-| `extension/lib/hcp.js` | Housecall Pro client: throttle, retries, signed-out detection |
-| `extension/lib/exporter.js` | Resumable export run and zip assembly |
-| `extension/lib/rows.js`, `extension/lib/zip.js` | CSV rows and a small stored-zip writer |
+| `extension/lib/hcp.js` | Housecall Pro client, plus the shared throttled requester (retries, signed-out detection, byte downloads) |
+| `extension/lib/exporter.js` | Housecall Pro export run and zip assembly |
+| `extension/lib/servicetitan.js`, `extension/lib/st-exporter.js` | ServiceTitan tenant detection, search and attachment client, and export run |
+| `extension/lib/blobs.js` | IndexedDB store for downloaded attachment files |
+| `extension/lib/rows.js`, `extension/lib/flatten.js`, `extension/lib/zip.js` | CSV rows, whole-record flattening, and a stored zip writer (Blob parts, ZIP64) |
 | `extension/background.js` | Service worker: runs the export, saves the zip, opens the page |
 | `extension/app.html`, `app.js`, `app.css` | The page users see |
 
 Try it locally: open `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and choose `extension/`.
 
-Ship it: bump `version` in `extension/manifest.json`, run `npm run package` to build `dist/hcp-job-costing-export-<version>.zip`, and upload that to the Chrome Web Store as an unlisted item. `store/LISTING.md` has the listing text, permission justifications and data disclosures. `store/PRIVACY.md` is the privacy policy to host publicly. `store/*.png` are the listing screenshots.
+Ship it: bump `version` in `extension/manifest.json`, run `npm run package` to build `dist/shvr-data-export-<version>.zip`, and upload that to the Chrome Web Store as an unlisted item. `store/LISTING.md` has the listing text, permission justifications and data disclosures. `store/PRIVACY.md` is the privacy policy to host publicly. `store/*.png` are the listing screenshots.
 
 ## Tests
 

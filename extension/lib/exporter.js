@@ -24,8 +24,17 @@ import {
 } from "./rows.js";
 import { makeZip } from "./zip.js";
 
-export const ACTIVE = new Set(["listing", "costs"]);
+// Statuses of a run that's still going, for either provider.
+export const ACTIVE = new Set(["listing", "costs", "attachments"]);
 const COST_PREFIX = "cost:";
+
+// Settings that outlive an export; everything else in storage is run data.
+const SETTINGS = new Set(["apiKey", "company", "provider", "stTenant"]);
+
+export async function clearRun(store) {
+  const keys = Object.keys(await store.get(null)).filter((key) => !SETTINGS.has(key));
+  if (keys.length) await store.remove(keys);
+}
 
 // store: { get(keys) -> object, set(object), remove(keys) } (chrome.storage.local's shape)
 // makeClient(apiKey, { onWait }) -> client from hcp.js
@@ -43,9 +52,7 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
   }
 
   async function clearRunData() {
-    const { jobs } = await store.get("jobs");
-    const keys = ["run", "jobs", "estimates", "estimateOptions", ...(jobs ?? []).map((job) => COST_PREFIX + job.job_id)];
-    await store.remove(keys);
+    await clearRun(store);
   }
 
   async function work() {
@@ -157,7 +164,7 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
     async start() {
       if (running) return running;
       await clearRunData();
-      await writeRun({ status: "listing", startedAt: now(), company: "", page: 0, totalPages: null, total: 0, done: 0, failed: [] });
+      await writeRun({ provider: "hcp", status: "listing", startedAt: now(), company: "", page: 0, totalPages: null, total: 0, done: 0, failed: [] });
       return launch();
     },
 
@@ -206,12 +213,12 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
   };
 }
 
-export function archiveName(company, date) {
+export function archiveName(company, date, title = "SHVR Export") {
   const day = [date.getFullYear(), date.getMonth() + 1, date.getDate()].map((n) => String(n).padStart(2, "0")).join("-");
   const who = String(company || "")
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 60);
-  return `HCP Job Costing Export${who ? ` - ${who}` : ""} - ${day}.zip`;
+  return `${title}${who ? ` - ${who}` : ""} - ${day}.zip`;
 }

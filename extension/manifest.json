@@ -1,18 +1,18 @@
 {
   "manifest_version": 3,
-  "name": "HCP Job Costing Export for SHVR",
-  "short_name": "Job Costing Export",
-  "version": "1.0.0",
-  "description": "Download every Housecall Pro job with its materials and miscellaneous costs as spreadsheets.",
+  "name": "SHVR Data Export",
+  "short_name": "SHVR Export",
+  "version": "1.1.0",
+  "description": "Download your jobs, estimates, customers and more from Housecall Pro or ServiceTitan as spreadsheets.",
   "minimum_chrome_version": "116",
-  "permissions": ["storage", "unlimitedStorage", "downloads"],
-  "host_permissions": ["https://api.housecallpro.com/*", "https://pro.housecallpro.com/*"],
+  "permissions": ["storage", "unlimitedStorage", "downloads", "cookies"],
+  "host_permissions": ["https://api.housecallpro.com/*", "https://pro.housecallpro.com/*", "https://*.servicetitan.com/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Export job costs",
+    "default_title": "Export my data",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

@@ -4,7 +4,7 @@ set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$root/extension/manifest.json")
-out="$root/dist/hcp-job-costing-export-$version.zip"
+out="$root/dist/shvr-data-export-$version.zip"
 
 mkdir -p "$root/dist"
 rm -f "$out"

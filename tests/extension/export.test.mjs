@@ -1,14 +1,11 @@
-// node --test tests/extension
+// node --test tests/extension/*.test.mjs
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 
 import { createExporter, archiveName } from "../../extension/lib/exporter.js";
 import { AuthError, RequestError, createClient } from "../../extension/lib/hcp.js";
 import { MISC_COLUMNS, materialRow, miscRow, toCsv } from "../../extension/lib/rows.js";
+import { memoryStore, unzip } from "./helpers.mjs";
 
 // --- hcp client --------------------------------------------------------------
 
@@ -117,23 +114,6 @@ test("CSV quotes awkward cells and starts with a BOM for Excel", () => {
 
 // --- exporter ----------------------------------------------------------------
 
-function memoryStore(initial = {}) {
-  const data = structuredClone(initial);
-  return {
-    data,
-    async get(keys) {
-      const list = typeof keys === "string" ? [keys] : keys;
-      return Object.fromEntries(list.filter((key) => key in data).map((key) => [key, structuredClone(data[key])]));
-    },
-    async set(items) {
-      Object.assign(data, structuredClone(items));
-    },
-    async remove(keys) {
-      for (const key of typeof keys === "string" ? [keys] : keys) delete data[key];
-    },
-  };
-}
-
 const JOBS = [
   { id: "job_a", invoice_number: "1001", customer: { first_name: "Ada", last_name: "Lovelace" }, subtotal: 123456 },
   { id: "job_b", invoice_number: "1002" },
@@ -188,13 +168,6 @@ function exporterFor(store, fake, onFinished = async () => {}) {
   return createExporter({ store, makeClient: () => fake.client, now: () => Date.UTC(2026, 10, 12, 15), onFinished });
 }
 
-function unzip(bytes, member) {
-  const dir = mkdtempSync(join(tmpdir(), "hcp-export-"));
-  const path = join(dir, "out.zip");
-  writeFileSync(path, bytes);
-  return execFileSync("unzip", ["-p", path, member], { encoding: "utf8" });
-}
-
 test("a full export lists every page of jobs and estimates, links costs to jobs, and zips the CSVs", async () => {
   const store = memoryStore({ apiKey: "k" });
   const fake = fakeClient();
@@ -212,7 +185,7 @@ test("a full export lists every page of jobs and estimates, links costs to jobs,
   assert.equal(finishedRun.estimates, 2);
 
   const { bytes, fileName } = await exporter.archive();
-  assert.equal(fileName, "HCP Job Costing Export - T1P Richmond - 2026-11-12.zip");
+  assert.equal(fileName, "SHVR Export - T1P Richmond - 2026-11-12.zip");
   const jobs = unzip(bytes, "jobs.csv").split("\r\n");
   assert.match(jobs[1], /^job_a,1001,,,,Ada Lovelace,/);
   assert.equal(jobs.length, 5); // header, 3 jobs, trailing newline
@@ -281,6 +254,6 @@ test("starting again drops the previous run's costs", async () => {
 });
 
 test("archive names stay valid file names", () => {
-  assert.equal(archiveName('A/B: "Painters"', new Date(2026, 0, 5)), "HCP Job Costing Export - A B Painters - 2026-01-05.zip");
-  assert.equal(archiveName("", new Date(2026, 0, 5)), "HCP Job Costing Export - 2026-01-05.zip");
+  assert.equal(archiveName('A/B: "Painters"', new Date(2026, 0, 5)), "SHVR Export - A B Painters - 2026-01-05.zip");
+  assert.equal(archiveName("", new Date(2026, 0, 5)), "SHVR Export - 2026-01-05.zip");
 });

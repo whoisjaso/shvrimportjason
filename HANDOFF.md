@@ -1,4 +1,6 @@
-# Handoff: HCP job costing export → SHVR integration
+# Handoff: SHVR Data Export → SHVR integration
+
+> Update 2026-11-13: the extension is now **SHVR Data Export**, with ServiceTitan support (searches plus job attachments, no API key) beside Housecall Pro, and the SHVR visual theme. README.md's "Chrome extension" section documents the ServiceTitan endpoints, the estimate-id finding for attachments, and the zip layout. The Housecall Pro details below are unchanged; zip files are now named `SHVR Export - <company> - <date>.zip`.
 
 Read this before building the SHVR side. It covers what exists in this repo, what has been proven against a live Housecall Pro account, the data contract, and the seams an integration should use.
 

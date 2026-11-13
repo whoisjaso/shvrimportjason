@@ -35,15 +35,17 @@ export class RequestError extends Error {
 
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function createClient({
-  apiKey,
+// Throttled JSON requests with retries, shared by the Housecall Pro and
+// ServiceTitan clients. request(url, init, { authError, sessionAuth }):
+// authError() builds the AuthError for a 401 or a login redirect; with
+// sessionAuth, a 200 that isn't JSON (a login page) counts as signed out too.
+export function createRequester({
   fetch = globalThis.fetch.bind(globalThis),
   sleep = realSleep,
   now = () => Date.now(),
   delayMs = DEFAULT_DELAY_MS,
-  publicBase = PUBLIC_BASE,
-  privateBase = PRIVATE_BASE,
   onWait = () => {},
+  service = "Housecall Pro",
 } = {}) {
   let lastStart = null;
 
@@ -55,7 +57,13 @@ export function createClient({
     lastStart = now();
   }
 
-  async function getJson(url, init, surface) {
+  async function backoff(attempt, reason) {
+    const seconds = 2 ** attempt;
+    onWait({ reason, seconds });
+    await sleep(seconds * 1000);
+  }
+
+  return async function request(url, init, { authError, sessionAuth = false, bytes = false }) {
     let rateLimited = 0;
     let serverFailures = 0;
     for (;;) {
@@ -66,16 +74,23 @@ export function createClient({
       } catch (error) {
         serverFailures += 1;
         if (serverFailures > MAX_SERVER_RETRIES) {
-          throw new RequestError(`Could not reach Housecall Pro (${error.message}).`);
+          throw new RequestError(`Could not reach ${service} (${error.message}).`);
         }
         await backoff(serverFailures, "connection problem");
         continue;
       }
 
       // A signed-out browser is redirected to the login page instead of
-      // getting JSON; the private calls ask not to follow redirects.
-      if (response.type === "opaqueredirect" || response.status === 401) {
-        throw authError(surface);
+      // getting JSON; session calls ask not to follow redirects.
+      if (response.type === "opaqueredirect" || response.status === 401) throw authError();
+      if (response.ok && bytes) {
+        // A login page served in place of a file means the session ended.
+        if (sessionAuth && (response.headers.get("Content-Type") ?? "").includes("text/html")) throw authError();
+        return {
+          bytes: new Uint8Array(await response.arrayBuffer()),
+          type: response.headers.get("Content-Type") ?? "",
+          disposition: response.headers.get("Content-Disposition") ?? "",
+        };
       }
       if (response.ok) {
         const text = await response.text();
@@ -83,14 +98,14 @@ export function createClient({
         try {
           return JSON.parse(text);
         } catch {
-          if (surface === "private") throw authError(surface);
+          if (sessionAuth) throw authError();
           throw new RequestError(`${pathOf(url)} returned something that isn't JSON.`, response.status);
         }
       }
       if (response.status === 429) {
         rateLimited += 1;
         if (rateLimited > MAX_RATE_LIMIT_RETRIES) {
-          throw new RequestError("Housecall Pro kept asking us to slow down.", 429);
+          throw new RequestError(`${service} kept asking us to slow down.`, 429);
         }
         const seconds = retryAfter(response.headers.get("Retry-After"));
         onWait({ reason: "rate_limited", seconds });
@@ -100,20 +115,29 @@ export function createClient({
       if (response.status >= 500) {
         serverFailures += 1;
         if (serverFailures > MAX_SERVER_RETRIES) {
-          throw new RequestError(`Housecall Pro had a problem (HTTP ${response.status}).`, response.status);
+          throw new RequestError(`${service} had a problem (HTTP ${response.status}).`, response.status);
         }
         await backoff(serverFailures, `HTTP ${response.status}`);
         continue;
       }
       throw new RequestError(`${pathOf(url)} returned HTTP ${response.status}.`, response.status);
     }
-  }
+  };
+}
 
-  async function backoff(attempt, reason) {
-    const seconds = 2 ** attempt;
-    onWait({ reason, seconds });
-    await sleep(seconds * 1000);
-  }
+export function createClient({
+  apiKey,
+  fetch,
+  sleep,
+  now,
+  delayMs,
+  publicBase = PUBLIC_BASE,
+  privateBase = PRIVATE_BASE,
+  onWait,
+} = {}) {
+  const request = createRequester({ fetch, sleep, now, delayMs, onWait });
+  const getJson = (url, init, surface) =>
+    request(url, init, { authError: () => authError(surface), sessionAuth: surface === "private" });
 
   function getPublic(path) {
     return getJson(
@@ -127,6 +151,16 @@ export function createClient({
     return getJson(
       `${privateBase}${path}`,
       { headers: { Accept: "application/json" }, credentials: "include", redirect: "manual" },
+      "private",
+    );
+  }
+
+  function postPrivateForm(path, fields) {
+    const body = new FormData();
+    for (const [key, value] of Object.entries(fields)) body.append(key, value);
+    return getJson(
+      `${privateBase}${path}`,
+      { method: "POST", body, headers: { Accept: "application/json" }, credentials: "include", redirect: "manual" },
       "private",
     );
   }
@@ -165,7 +199,42 @@ export function createClient({
     async miscellaneousItems(jobId) {
       return listData(await getPrivate(`/alpha/jobs/${encodeURIComponent(jobId)}/miscellaneous_items`));
     },
+
+    // The company's enabled public-API keys, as listed on My Apps › API Key
+    // Management: [{ id, api_key, note, role, kind, enabled }]. Only admins
+    // may read them (others get 401/403).
+    async apiKeys() {
+      return listData(await getPrivate("/alpha/organization/api_keys?enabled=true&kind=API_ACCESS"));
+    },
+
+    // Generate a key the way the API Key Management page does (form post).
+    async createApiKey({ note, role = READ_ONLY_ROLE }) {
+      return postPrivateForm("/alpha/organization/api_keys", { note, kind: "API_ACCESS", role });
+    },
   };
+}
+
+export const READ_ONLY_ROLE = "API_KEY_READER";
+export const SHVR_KEY_NOTE = "SHVR Data Export";
+
+// The key this extension uses: an enabled key whose note mentions SHVR
+// (read-only preferred), or a new read-only one. Returns { apiKey, created }.
+// Throws a RequestError when the signed-in user can't manage keys.
+export async function findOrCreateApiKey(client) {
+  const shvr = (keys) =>
+    keys
+      .filter((key) => key.enabled !== false && typeof key.api_key === "string" && /shvr/i.test(key.note ?? ""))
+      .sort((a, b) => Number(b.role === READ_ONLY_ROLE) - Number(a.role === READ_ONLY_ROLE));
+  const existing = shvr(await client.apiKeys())[0];
+  if (existing) return { apiKey: existing.api_key, created: false };
+
+  const made = await client.createApiKey({ note: SHVR_KEY_NOTE });
+  const record = made?.data && !Array.isArray(made.data) ? made.data : made;
+  if (typeof record?.api_key === "string") return { apiKey: record.api_key, created: true };
+  // The create response didn't carry the key; it's in the list now.
+  const listed = shvr(await client.apiKeys())[0];
+  if (!listed) throw new RequestError("Housecall Pro didn't return the new API key.");
+  return { apiKey: listed.api_key, created: true };
 }
 
 function authError(surface) {

@@ -3,6 +3,9 @@
 
 import { createClient } from "./lib/hcp.js";
 import { createExporter } from "./lib/exporter.js";
+import { createServiceTitanClient } from "./lib/servicetitan.js";
+import { createServiceTitanExporter } from "./lib/st-exporter.js";
+import { fileStore } from "./lib/blobs.js";
 
 const store = {
   get: (keys) => chrome.storage.local.get(keys),
@@ -20,14 +23,33 @@ async function sleep(ms) {
   }
 }
 
-const exporter = createExporter({
-  store,
-  makeClient: (apiKey, { onWait }) => createClient({ apiKey, sleep, onWait }),
-  onFinished: () => saveArchive(),
-});
+const exporters = {
+  hcp: createExporter({
+    store,
+    makeClient: (apiKey, { onWait }) => createClient({ apiKey, sleep, onWait }),
+    onFinished: () => saveArchive(),
+  }),
+  // Attachments can run to gigabytes, so the open app page builds the
+  // ServiceTitan zip from Blobs and downloads it (see app.js); a worker can't
+  // make a Blob URL for chrome.downloads.
+  servicetitan: createServiceTitanExporter({
+    store,
+    files: fileStore,
+    makeClient: (host, { onWait }) => createServiceTitanClient({ host, sleep, onWait }),
+  }),
+};
 
+// The exporter that owns the current run (or would own a new one).
+async function currentExporter() {
+  const { run } = await store.get("run");
+  return exporters[run?.provider] ?? exporters.hcp;
+}
+
+const ST_HOST = /^[a-z0-9_-]+\.(?:[a-z0-9-]+\.)*servicetitan\.com$/i;
+
+// Housecall Pro only: its zip is small enough for a data: URL.
 async function saveArchive() {
-  const { bytes, fileName } = await exporter.archive();
+  const { bytes, fileName } = await exporters.hcp.archive();
   const downloadId = await chrome.downloads.download({
     url: `data:application/zip;base64,${base64(bytes)}`,
     filename: fileName,
@@ -61,13 +83,19 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === "install") chrome.tabs.create({ url: chrome.runtime.getURL("app.html") });
 });
 
-chrome.runtime.onStartup.addListener(() => exporter.resume());
+chrome.runtime.onStartup.addListener(async () => (await currentExporter()).resume());
 
 const actions = {
-  start: () => exporter.start(),
-  resume: () => exporter.resume(),
-  retry: () => exporter.retry(),
-  cancel: () => exporter.cancel(),
+  start: (message) => {
+    if (message.provider === "servicetitan") {
+      if (!ST_HOST.test(message.host ?? "")) throw new Error("Not a ServiceTitan host.");
+      return exporters.servicetitan.start({ tenant: String(message.tenant), host: message.host });
+    }
+    return exporters.hcp.start();
+  },
+  resume: async () => (await currentExporter()).resume(),
+  retry: async () => (await currentExporter()).retry(),
+  cancel: async () => (await currentExporter()).cancel(),
   download: () => saveArchive(),
   showFile: async () => {
     const { run } = await store.get("run");
@@ -79,7 +107,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return false;
   const action = actions[message?.type];
   if (!action) return false;
-  const work = Promise.resolve(action()).catch((error) => console.error(error));
+  const work = Promise.resolve()
+    .then(() => action(message))
+    .catch((error) => console.error(error));
   if (message.type === "download" || message.type === "showFile") {
     work.finally(() => sendResponse({ ok: true }));
     return true;
