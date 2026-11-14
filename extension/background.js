@@ -89,7 +89,7 @@ const actions = {
   start: (message) => {
     if (message.provider === "servicetitan") {
       if (!ST_HOST.test(message.host ?? "")) throw new Error("Not a ServiceTitan host.");
-      return exporters.servicetitan.start({ tenant: String(message.tenant), host: message.host });
+      return exporters.servicetitan.start({ tenant: String(message.tenant), host: message.host, includeAttachments: message.includeAttachments !== false });
     }
     return exporters.hcp.start();
   },

@@ -15,7 +15,7 @@ Paste these into the developer dashboard at <https://chrome.google.com/webstore/
 > SHVR Data Export downloads the records from the software you use today and saves them as one zip file of spreadsheets you can open in Excel or Google Sheets.
 >
 > ServiceTitan
-> Sign in to ServiceTitan in Chrome and choose ServiceTitan. No API key needed. You get one spreadsheet each for jobs, estimates, customers, invoices, leads and payments, with every field ServiceTitan provides. Each job's documents, photos and measurement reports are downloaded into an attachments folder, and attachments.csv lists every file with the job it belongs to.
+> Sign in to ServiceTitan in Chrome and choose ServiceTitan. No API key needed. You get one spreadsheet each for jobs, estimates, customers, invoices, leads and payments, with every field ServiceTitan provides. If you include attachments, each job's photos, documents and measurement reports come in a second zip file, with attachments.csv listing every file and the job it belongs to.
 >
 > Housecall Pro
 > Sign in to Housecall Pro in Chrome. The extension uses your company's SHVR API key, or creates a read-only one for you (admins only; anyone else can paste a key instead). You get:
@@ -43,7 +43,7 @@ Paste these into the developer dashboard at <https://chrome.google.com/webstore/
 
 **Single purpose:**
 
-> Export the user's own records (jobs, estimates, customers, invoices, leads, payments, job costs and job attachments) from their field-service software to CSV spreadsheets and files in one zip.
+> Export the user's own records (jobs, estimates, customers, invoices, leads, payments, job costs and job attachments) from their field-service software to CSV spreadsheets and files in zip files.
 
 **Permission justifications:**
 

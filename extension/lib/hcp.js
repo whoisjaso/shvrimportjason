@@ -66,17 +66,21 @@ export function createRequester({
   return async function request(url, init, { authError, sessionAuth = false, bytes = false }) {
     let rateLimited = 0;
     let serverFailures = 0;
+    // A dropped connection, before the headers or while reading the body.
+    const connectionLost = async (error) => {
+      serverFailures += 1;
+      if (serverFailures > MAX_SERVER_RETRIES) {
+        throw new RequestError(`Could not reach ${service} (${error.message}).`);
+      }
+      await backoff(serverFailures, "connection problem");
+    };
     for (;;) {
       await throttle();
       let response;
       try {
         response = await fetch(url, init);
       } catch (error) {
-        serverFailures += 1;
-        if (serverFailures > MAX_SERVER_RETRIES) {
-          throw new RequestError(`Could not reach ${service} (${error.message}).`);
-        }
-        await backoff(serverFailures, "connection problem");
+        await connectionLost(error);
         continue;
       }
 
@@ -86,14 +90,27 @@ export function createRequester({
       if (response.ok && bytes) {
         // A login page served in place of a file means the session ended.
         if (sessionAuth && (response.headers.get("Content-Type") ?? "").includes("text/html")) throw authError();
+        let body;
+        try {
+          body = new Uint8Array(await response.arrayBuffer());
+        } catch (error) {
+          await connectionLost(error);
+          continue;
+        }
         return {
-          bytes: new Uint8Array(await response.arrayBuffer()),
+          bytes: body,
           type: response.headers.get("Content-Type") ?? "",
           disposition: response.headers.get("Content-Disposition") ?? "",
         };
       }
       if (response.ok) {
-        const text = await response.text();
+        let text;
+        try {
+          text = await response.text();
+        } catch (error) {
+          await connectionLost(error);
+          continue;
+        }
         if (!text.trim()) return {};
         try {
           return JSON.parse(text);

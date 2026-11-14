@@ -126,6 +126,10 @@
 
             <div data-view="ready" hidden>
               <p id="ready-text"></p>
+              <label class="option" id="st-attachments-option" hidden>
+                <input type="checkbox" id="st-attachments" checked />
+                <span><b>Include attachments</b><span class="option-note">Every job's photos, documents and measurement reports, in a second zip file. This can take much longer and use several gigabytes.</span></span>
+              </label>
               <button type="button" class="btn primary big" id="start">
                 <svg class="icon"><use href="#i-download" /></svg><span id="start-label">Export my data</span>
               </button>
@@ -144,7 +148,7 @@
             </div>
 
             <div data-view="done" hidden>
-              <p class="done-line"><svg class="icon ok"><use href="#i-check" /></svg><span>Done. Your zip file is in your <b>Downloads</b> folder.</span></p>
+              <p class="done-line"><svg class="icon ok"><use href="#i-check" /></svg><span>Done. Your <span id="done-what">zip file is</span> in your <b>Downloads</b> folder.</span></p>
               <p class="file" id="done-file"></p>
               <p class="summary" id="done-summary"></p>
               <div class="actions">

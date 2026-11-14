@@ -22,7 +22,7 @@ In both cases the extension never reads, copies or stores your password or sign-
 
 ## What it does with that data
 
-It turns the data into CSV files, adds any downloaded attachments, zips them, and saves the zip to your Downloads folder. While an export runs, progress and downloaded files are kept in your browser's local extension storage so an interrupted export can resume; starting a new export replaces them, and removing the extension deletes them.
+It turns the data into CSV files, zips them, and saves the zip to your Downloads folder; downloaded attachments go into a second zip beside it. While an export runs, progress and downloaded files are kept in your browser's local extension storage so an interrupted export can resume; starting a new export replaces them, and removing the extension deletes them.
 
 ## What it never does
 

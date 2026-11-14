@@ -17,6 +17,7 @@ const state = {
   stTenants: [], // [{ tenant, host }] the browser is signed in to
   stTenant: "", // the chosen tenant
   stSession: "pending",
+  stAttachments: true, // also export every job's files, as a second zip
   run: null,
 };
 
@@ -51,8 +52,10 @@ function render() {
   $("export-num").textContent = st || !manualKey ? "2" : "3";
   $("start-label").textContent = "Export My Data";
   $("ready-text").textContent = st
-    ? "This reads every job, estimate, customer, invoice, lead and payment, then downloads each job's documents, photos and measurements. A large account can take a while. You'll get one zip file with a spreadsheet for each kind of record and a folder of attachments."
+    ? "This reads every job, estimate, customer, invoice, lead and payment. You'll get a zip file with a spreadsheet for each kind of record."
     : "This reads every job and estimate, then each job's materials and miscellaneous costs. A large account can take several minutes. You'll get one zip file of spreadsheets: jobs, materials, miscellaneous items, estimates, and estimate options.";
+  $("st-attachments-option").hidden = !st;
+  $("st-attachments").checked = state.stAttachments;
 
   let ready;
   if (st) {
@@ -124,16 +127,16 @@ function stParts(run) {
     seenActive = true;
   }
 
+  // A run decides for itself; before one starts, the checkbox does.
+  if (!(run ? run.includeAttachments || run.attachments : state.stAttachments)) return parts;
   const att = run?.attachments;
-  const step = run?.step;
   const attachments = { key: "attachments", label: "Attachments", state: "pending", count: "", part: null, detail: "" };
   if (run?.status === "attachments" && att) {
-    const liveFiles = att.files + (step?.files ?? 0);
     attachments.state = "active";
-    attachments.count = `${fmt(liveFiles)} file${liveFiles === 1 ? "" : "s"}`;
-    attachments.part = att.total ? (att.done + (step?.count ? step.index / step.count : 0)) / att.total : 0;
-    attachments.detail = `Estimate ${fmt(Math.min(att.done + 1, att.total))} of ${fmt(att.total)} · ${megabytes(att.bytes + (step?.bytes ?? 0))}`;
-    attachments.live = { step, preview: run.preview };
+    attachments.count = `${fmt(att.files)} file${att.files === 1 ? "" : "s"}`;
+    attachments.part = att.total ? att.done / att.total : 0;
+    attachments.detail = `${fmt(att.done)} of ${fmt(att.total)} jobs · ${megabytes(att.bytes)}`;
+    attachments.live = { current: run.current, preview: run.preview };
   } else if (run?.status === "done" && att) {
     attachments.state = "done";
     attachments.count = `${fmt(att.files)} file${att.files === 1 ? "" : "s"}`;
@@ -179,12 +182,13 @@ function hcpParts(run) {
 function overallOf(provider, run, parts) {
   if (run?.status === "done") return 1;
   if (provider === "servicetitan") {
-    const searches = parts.slice(0, -1);
-    const attachments = parts.at(-1);
-    if (attachments.state === "active") return 0.5 + (attachments.part ?? 0) * 0.5;
+    const searches = parts.filter((part) => part.key !== "attachments");
+    const attachments = parts.find((part) => part.key === "attachments");
+    const share = attachments ? 0.5 : 1;
+    if (attachments?.state === "active") return share + (attachments.part ?? 0) * share;
     const finished = searches.filter((part) => part.state === "done").length;
     const current = searches.find((part) => part.state === "active");
-    return ((finished + (current?.part ?? 0)) / searches.length) * 0.5;
+    return ((finished + (current?.part ?? 0)) / searches.length) * share;
   }
   const [jobs, estimates, costs] = parts;
   if (costs.state === "active") return 0.1 + (costs.part ?? 0) * 0.9;
@@ -254,13 +258,8 @@ function renderLive(row, live) {
   const box = row.querySelector(".part-live");
   box.hidden = !live;
   if (!live) return;
-  const step = live.step;
-  const where = step?.jobNumber ? `Job ${step.jobNumber}` : step ? `Estimate ${step.estimateId}` : "";
-  let text = "Starting the next estimate…";
-  if (step?.phase === "listing") text = `${where}: finding attachments…`;
-  else if (step?.phase === "downloading" && step.count === 0) text = `${where}: nothing new to download`;
-  else if (step?.phase === "downloading") text = `${where}: file ${fmt(step.index)} of ${fmt(step.count)}`;
-  row.querySelector(".part-file").textContent = text;
+  const where = live.current ? capitalize(live.current) : "";
+  row.querySelector(".part-file").textContent = where ? `${where}: downloading…` : "Starting the next job…";
   renderPreview(row, live.preview);
 }
 
@@ -314,12 +313,15 @@ function estimate(run) {
 }
 
 function renderDone(run) {
-  $("done-file").textContent = run.fileName || (building ? "Putting your zip file together…" : "");
+  const names = [run.fileName, run.attachmentsFileName].filter(Boolean);
+  const two = Boolean(run.attachments);
+  $("done-what").textContent = two ? "zip files are" : "zip file is";
+  $("done-file").textContent = run.fileName ? names.join("\n") : building ? `Putting your zip file${two ? "s" : ""} together…` : "";
   if (runProvider(run) === "servicetitan") {
     const counts = ENTITIES.map((entity) => `${fmt(run.entities[entity.key].count)} ${entity.label}`).join(", ");
     const att = run.attachments;
     const files = att ? ` and ${fmt(att.files)} attachments (${megabytes(att.bytes)})` : "";
-    const failed = att?.failed ? ` ${fmt(att.failed)} attachments couldn't be downloaded; attachments.csv lists them.` : "";
+    const failed = att?.failed ? ` ${fmt(att.failed)} attachments or job listings couldn't be downloaded; attachments.csv lists them.` : "";
     const skipped = att?.skipped ? ` ${fmt(att.skipped)} pricebook and supplier product photos were left out.` : "";
     $("done-summary").textContent = `Exported ${counts}${files}.${skipped}${failed}`;
   } else {
@@ -388,17 +390,25 @@ const stArchiver = createServiceTitanExporter({ store, files: fileStore, makeCli
 let building = false;
 const blobUrls = new Map(); // download id -> object URL, revoked when it finishes
 
+// Two downloads: the spreadsheets, then (when the run fetched them) the
+// attachments. The data zip is small; the attachments one can be gigabytes.
 async function saveStZip() {
   if (building) return;
   building = true;
   render();
   try {
-    const { parts, fileName } = await stArchiver.archive();
-    const url = URL.createObjectURL(new Blob(parts, { type: "application/zip" }));
-    const downloadId = await chrome.downloads.download({ url, filename: fileName, conflictAction: "uniquify" });
-    blobUrls.set(downloadId, url);
+    const download = async ({ parts, fileName }) => {
+      const url = URL.createObjectURL(new Blob(parts, { type: "application/zip" }));
+      const id = await chrome.downloads.download({ url, filename: fileName, conflictAction: "uniquify" });
+      blobUrls.set(id, url);
+      return id;
+    };
+    const data = await stArchiver.archive();
+    const downloadId = await download(data);
+    const attachments = await stArchiver.attachmentsArchive();
+    if (attachments) await download(attachments);
     const { run } = await store.get("run");
-    await store.set({ run: { ...run, downloadId, fileName } });
+    await store.set({ run: { ...run, downloadId, fileName: data.fileName, attachmentsFileName: attachments?.fileName ?? "" } });
   } finally {
     building = false;
     render();
@@ -429,7 +439,7 @@ function send(type, extra = {}) {
 function startExport() {
   if (state.provider !== "servicetitan") return send("start");
   const choice = stChoice();
-  if (choice) send("start", { provider: "servicetitan", tenant: choice.tenant, host: choice.host });
+  if (choice) send("start", { provider: "servicetitan", tenant: choice.tenant, host: choice.host, includeAttachments: state.stAttachments });
 }
 
 function normalizeKey(raw) {
@@ -590,6 +600,11 @@ $("st-tenant-select").addEventListener("change", async (event) => {
   state.stSession = "pending";
   checkStSession();
 });
+$("st-attachments").addEventListener("change", async (event) => {
+  state.stAttachments = event.target.checked;
+  await chrome.storage.local.set({ stAttachments: state.stAttachments });
+  render();
+});
 for (const input of $("platform").querySelectorAll("input")) {
   input.addEventListener("change", async () => {
     state.provider = input.value;
@@ -636,12 +651,13 @@ setInterval(() => {
   if (state.run && ACTIVE.has(state.run.status)) render();
 }, 1000);
 
-const stored = await chrome.storage.local.get(["apiKey", "company", "run", "provider", "stTenant"]);
+const stored = await chrome.storage.local.get(["apiKey", "company", "run", "provider", "stTenant", "stAttachments"]);
 state.apiKey = stored.apiKey ?? "";
 state.company = stored.apiKey ? (stored.company ?? "") : "";
 state.run = stored.run ?? null;
 state.provider = stored.provider === "servicetitan" ? "servicetitan" : "hcp";
 state.stTenant = stored.stTenant ?? "";
+state.stAttachments = stored.stAttachments !== false;
 render();
 if (state.provider === "hcp") checkSession();
 if (state.provider === "servicetitan") checkStSession();

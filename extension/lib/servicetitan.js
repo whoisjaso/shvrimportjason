@@ -9,6 +9,9 @@
 
 import { AuthError, RequestError, createRequester } from "./hcp.js";
 
+// Most files the per-job listing returns; it has no known offset parameter.
+export const JOB_ATTACHMENT_LIMIT = 1000;
+
 export const ENTITIES = [
   { key: "jobs", search: "Job", label: "jobs" },
   { key: "estimates", search: "Estimate", label: "estimates" },
@@ -48,6 +51,9 @@ export function tenantsFromCookies(cookies) {
 
 export function createServiceTitanClient({ host, fetch, sleep, now, delayMs, onWait } = {}) {
   const request = createRequester({ fetch, sleep, now, delayMs, onWait, service: "ServiceTitan" });
+  // File downloads skip the request spacing: they're latency-bound, and the
+  // exporter caps how many run at once (32 measured clean, 2026-11-13).
+  const fileRequest = createRequester({ fetch, sleep, now, delayMs: 0, onWait, service: "ServiceTitan" });
   const signedOut = () => new AuthError("session", "You're not signed in to ServiceTitan in this browser.");
 
   async function search(entity, page) {
@@ -69,11 +75,11 @@ export function createServiceTitanClient({ host, fetch, sleep, now, delayMs, onW
     return parseSearch(body, entity);
   }
 
-  async function get(path, bytes = false) {
+  async function get(path) {
     return request(
       `https://${host}${path}`,
-      { credentials: "include", redirect: "manual", headers: { Accept: bytes ? "*/*" : "application/json" } },
-      { authError: signedOut, sessionAuth: true, bytes },
+      { credentials: "include", redirect: "manual", headers: { Accept: "application/json" } },
+      { authError: signedOut, sessionAuth: true },
     );
   }
 
@@ -86,21 +92,33 @@ export function createServiceTitanClient({ host, fetch, sleep, now, delayMs, onW
       await search("Job", 1);
     },
 
-    // Attachment listings. Checked live (2026-11-13): these take an
-    // *estimate* id; a job id gets HTTP 500. The documents list holds the
-    // estimate's job's files (ownerType 1 = job); measurements belong to the
-    // job's location (ownerType 2). Each row gets fileRef, the value
-    // /Attach/Job?name= takes.
-    async measurements(estimateId) {
-      const body = await get(`/app/api/fam/documentManagement/1/${encodeURIComponent(estimateId)}/measurements`);
-      return (Array.isArray(body) ? body : []).flatMap((report) => {
-        const files = Array.isArray(report.files) ? report.files.filter((file) => file?.fileUrl) : [];
-        const { files: _files, ...rest } = report;
-        return files.map((file) => ({ ...rest, file, fileRef: file.fileUrl }));
-      });
+    // Attachment listings, checked live 2026-11-13. Each row gets fileRef,
+    // the value /Attach/Job?name= takes.
+
+    // Every file on a job: photos, videos, PDFs, signed documents, message
+    // media. photosVideosOnly=true would drop the documents.
+    async jobAttachments(jobId) {
+      const body = await get(
+        `/app/api/fam/attachments/1/${encodeURIComponent(jobId)}?limit=${JOB_ATTACHMENT_LIMIT}&photosVideosOnly=false&includeRelatedEntities=false`,
+      );
+      return (Array.isArray(body) ? body : []).filter((item) => item?.filename).map((item) => ({ ...item, fileRef: item.filename }));
     },
 
-    async documents(estimateId) {
+    // Measurement reports for a job; a pending report has no files yet.
+    async jobMeasurements(jobId) {
+      const body = await get(`/app/api/measurements/job/${encodeURIComponent(jobId)}?active=true`);
+      return reportFiles(body, "name");
+    },
+
+    // For estimates without a job, the older estimate-keyed endpoints (a job
+    // id gets HTTP 500 there). Documents include the sales record's files
+    // (ownerType 5) and pricebook images (ownerType 8).
+    async estimateMeasurements(estimateId) {
+      const body = await get(`/app/api/fam/documentManagement/1/${encodeURIComponent(estimateId)}/measurements`);
+      return reportFiles(body, "fileUrl");
+    },
+
+    async estimateDocuments(estimateId) {
       const items = [];
       for (let start = 0; ; ) {
         const body = await get(
@@ -116,9 +134,23 @@ export function createServiceTitanClient({ host, fetch, sleep, now, delayMs, onW
 
     // { bytes, type, disposition } for one attachment.
     download(fileRef) {
-      return get(`/Attach/Job?name=${encodeURIComponent(fileRef)}`, true);
+      return fileRequest(
+        `https://${host}/Attach/Job?name=${encodeURIComponent(fileRef)}`,
+        { credentials: "include", redirect: "manual", headers: { Accept: "*/*" } },
+        { authError: signedOut, sessionAuth: true, bytes: true },
+      );
     },
   };
+}
+
+// One row per file of each measurement report; refKey names the field
+// holding the /Attach/Job name ("name" per job, "fileUrl" per estimate).
+function reportFiles(body, refKey) {
+  return (Array.isArray(body) ? body : []).flatMap((report) => {
+    const files = Array.isArray(report.files) ? report.files.filter((file) => file?.[refKey]) : [];
+    const { files: _files, ...rest } = report;
+    return files.map((file) => ({ ...rest, file, fileRef: file[refKey] }));
+  });
 }
 
 export function parseSearch(body, entity = "search") {
