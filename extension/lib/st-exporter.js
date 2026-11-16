@@ -20,6 +20,7 @@ import { columnsOf, flatten } from "./flatten.js";
 import { ENTITIES, JOB_ATTACHMENT_LIMIT, recordId } from "./servicetitan.js";
 import { toCsv } from "./rows.js";
 import { crc32, zipParts } from "./zip.js";
+import { IMAGE_EXT, VIDEO_EXT, isImage, lastSegment, limiter, prefixed, safeName, uniquePath } from "./files.js";
 
 const MAX_PAGES = 5000;
 // Downloads are latency-bound (~600ms each, one at a time). Measured live
@@ -373,64 +374,6 @@ export function attachmentUnits(jobs, estimates) {
     if (id && !estimate.JobId) units.set(`estimate:${id}`, { key: `estimate:${id}`, kind: "estimate", jobId: "", jobNumber: "", estimateId: id, label: `estimate ${id}`, folder: safeName(`estimate ${id}`) });
   }
   return [...units.values()];
-}
-
-// Runs at most `max` of the given async functions at once.
-function limiter(max) {
-  let active = 0;
-  const queue = [];
-  const next = () => {
-    if (active >= max || !queue.length) return;
-    active += 1;
-    const { fn, resolve, reject } = queue.shift();
-    fn()
-      .then(resolve, reject)
-      .finally(() => {
-        active -= 1;
-        next();
-      });
-  };
-  return (fn) =>
-    new Promise((resolve, reject) => {
-      queue.push({ fn, resolve, reject });
-      next();
-    });
-}
-
-function prefixed(info = {}) {
-  return Object.fromEntries(Object.entries(info).map(([key, value]) => [`info.${key}`, value]));
-}
-
-function lastSegment(ref) {
-  return String(ref ?? "").split("/").filter(Boolean).pop() ?? "";
-}
-
-const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|avif|heic|heif|tiff?)$/i;
-const VIDEO_EXT = /\.(mp4|mov|m4v|avi|webm|3gp|mkv)$/i;
-
-// ServiceTitan labels some photos "unknown/unknown", so fall back to the name.
-function isImage(type, name) {
-  return /^image\/(jpeg|png|gif|webp|bmp|avif)/i.test(type) || /\.(jpe?g|png|gif|webp|bmp|avif)$/i.test(name);
-}
-
-// Safe on Windows and macOS; keeps the extension.
-export function safeName(name) {
-  const cleaned = String(name)
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
-    .replace(/\s+/g, " ")
-    .replace(/^[ .]+|[ ]+$/g, "")
-    .slice(0, 150);
-  return cleaned || "file";
-}
-
-function uniquePath(path, used) {
-  let candidate = path;
-  const dot = path.lastIndexOf(".");
-  const slash = path.lastIndexOf("/");
-  const [stem, ext] = dot > slash + 1 ? [path.slice(0, dot), path.slice(dot)] : [path, ""];
-  for (let n = 2; used.has(candidate); n += 1) candidate = `${stem} (${n})${ext}`;
-  used.add(candidate);
-  return candidate;
 }
 
 // Attachment categories, from what ServiceTitan says a document belongs to

@@ -8,7 +8,7 @@ Paste these into the developer dashboard at <https://chrome.google.com/webstore/
 
 **Summary** (132 characters max):
 
-> Download your jobs, estimates, customers and more from Housecall Pro or ServiceTitan as spreadsheets you can bring to SHVR.
+> Download your jobs, customers, invoices and more from Housecall Pro, ServiceTitan or Jobber as spreadsheets to bring to SHVR.
 
 **Description:**
 
@@ -16,6 +16,9 @@ Paste these into the developer dashboard at <https://chrome.google.com/webstore/
 >
 > ServiceTitan
 > Sign in to ServiceTitan in Chrome and choose ServiceTitan. No API key needed. You get one spreadsheet each for jobs, estimates, customers, invoices, leads and payments, with every field ServiceTitan provides. If you include attachments, each job's photos, documents and measurement reports come in a second zip file, with attachments.csv listing every file and the job it belongs to.
+>
+> Jobber
+> Sign in to Jobber in Chrome and choose Jobber. No API key needed. You get one spreadsheet each for jobs, clients, quotes, invoices and requests. If you include attachments, the files and photos on every job, client, quote, invoice and request come in a second zip file, with attachments.csv listing every file and the record it belongs to.
 >
 > Housecall Pro
 > Sign in to Housecall Pro in Chrome. The extension uses your company's SHVR API key, or creates a read-only one for you (admins only; anyone else can paste a key instead). You get:
@@ -27,9 +30,9 @@ Paste these into the developer dashboard at <https://chrome.google.com/webstore/
 >
 > A progress bar shows how far along the export is. Requests are spaced out so the export doesn't overload either service, and an interrupted export picks up where it left off.
 >
-> Your data goes only between your browser and Housecall Pro or ServiceTitan. Nothing is sent to us or anyone else.
+> Your data goes only between your browser and Housecall Pro, ServiceTitan or Jobber. Nothing is sent to us or anyone else.
 >
-> Housecall Pro needs a plan with API access (MAX). This extension is not made by or affiliated with Housecall Pro or ServiceTitan.
+> Housecall Pro needs a plan with API access (MAX). This extension is not made by or affiliated with Housecall Pro, ServiceTitan or Jobber.
 
 **Category:** Productivity (Workflow & Planning)
 
@@ -56,6 +59,8 @@ Paste these into the developer dashboard at <https://chrome.google.com/webstore/
 | Host `https://pro.housecallpro.com/*` | Reads each job's materials and miscellaneous costs using the user's existing Housecall Pro sign-in in this browser, and finds or creates the read-only "SHVR Data Export" API key in the user's API Key Management so they don't have to copy one. |
 | `cookies` | Finds which ServiceTitan account the user is signed in to, from the domains of ServiceTitan's sign-in cookies and the value of its `st_tenant` cookie (the account name), so the export calls that account's address. Sign-in cookie values are never used, stored or sent. |
 | Host `https://*.servicetitan.com/*` | Reads the user's ServiceTitan jobs, estimates, customers, invoices, leads and payments using their existing ServiceTitan sign-in in this browser. Each account lives on its own subdomain. |
+| Host `https://api.getjobber.com/*` | Reads the user's Jobber jobs, clients, quotes, invoices and requests, and the list of their attached files, from Jobber's API using their existing Jobber sign-in in this browser. |
+| Hosts `https://jobber.s3.amazonaws.com/*` and `https://jobber-production-general-uploads.s3.amazonaws.com/*` | Downloads the user's Jobber attachments from the time-limited download links Jobber's API returns for them; Jobber stores files in these two buckets. |
 
 **Remote code:** No, I am not using remote code.
 

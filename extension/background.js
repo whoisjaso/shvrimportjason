@@ -5,6 +5,8 @@ import { createClient } from "./lib/hcp.js";
 import { createExporter } from "./lib/exporter.js";
 import { createServiceTitanClient } from "./lib/servicetitan.js";
 import { createServiceTitanExporter } from "./lib/st-exporter.js";
+import { createJobberClient } from "./lib/jobber.js";
+import { createJobberExporter } from "./lib/jobber-exporter.js";
 import { fileStore } from "./lib/blobs.js";
 
 const store = {
@@ -30,12 +32,17 @@ const exporters = {
     onFinished: () => saveArchive(),
   }),
   // Attachments can run to gigabytes, so the open app page builds the
-  // ServiceTitan zip from Blobs and downloads it (see app.js); a worker can't
-  // make a Blob URL for chrome.downloads.
+  // ServiceTitan and Jobber zips from Blobs and downloads them (see app.js);
+  // a worker can't make a Blob URL for chrome.downloads.
   servicetitan: createServiceTitanExporter({
     store,
     files: fileStore,
     makeClient: (host, { onWait }) => createServiceTitanClient({ host, sleep, onWait }),
+  }),
+  jobber: createJobberExporter({
+    store,
+    files: fileStore,
+    makeClient: ({ onWait }) => createJobberClient({ sleep, onWait }),
   }),
 };
 
@@ -87,6 +94,9 @@ chrome.runtime.onStartup.addListener(async () => (await currentExporter()).resum
 
 const actions = {
   start: (message) => {
+    if (message.provider === "jobber") {
+      return exporters.jobber.start({ includeAttachments: message.includeAttachments !== false, linksOnly: message.linksOnly === true });
+    }
     if (message.provider === "servicetitan") {
       if (!ST_HOST.test(message.host ?? "")) throw new Error("Not a ServiceTitan host.");
       return exporters.servicetitan.start({ tenant: String(message.tenant), host: message.host, includeAttachments: message.includeAttachments !== false });

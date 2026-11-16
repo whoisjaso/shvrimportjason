@@ -42,11 +42,30 @@
         <div class="platform-options">
           <label><input type="radio" name="provider" value="hcp" checked /> Housecall Pro</label>
           <label><input type="radio" name="provider" value="servicetitan" /> ServiceTitan</label>
+          <label><input type="radio" name="provider" value="jobber" /> Jobber</label>
         </div>
       </fieldset>
 
       <section class="panel" aria-label="Export">
       <ol class="steps">
+        <!-- Jobber step 1: sign-in (shown only for Jobber) -->
+        <li class="step" id="step-jb-session" data-state="current" hidden>
+          <span class="marker" aria-hidden="true"><span class="num">1</span><svg class="icon"><use href="#i-check" /></svg></span>
+          <div class="step-body">
+            <h2>Sign In to Jobber</h2>
+            <p data-view="checking" hidden><span class="spinner" aria-hidden="true"></span> Checking…</p>
+            <p data-view="ok" hidden>You're signed in to Jobber as <strong id="jb-account-name"></strong>.</p>
+            <div data-view="signed-out" hidden>
+              <p>Sign in to Jobber in this browser, then come back to this tab. This page notices when you're signed in.</p>
+              <button type="button" class="btn" id="open-jb">Open Jobber<svg class="icon"><use href="#i-external" /></svg></button>
+            </div>
+            <div data-view="unreachable" hidden>
+              <p class="message error">Couldn't reach Jobber. Check your internet connection.</p>
+              <button type="button" class="btn" id="jb-session-retry">Check Again</button>
+            </div>
+          </div>
+        </li>
+
         <!-- ServiceTitan step 1: sign-in (shown only for ServiceTitan) -->
         <li class="step" id="step-st-session" data-state="current" hidden>
           <span class="marker" aria-hidden="true"><span class="num">1</span><svg class="icon"><use href="#i-check" /></svg></span>
@@ -126,9 +145,13 @@
 
             <div data-view="ready" hidden>
               <p id="ready-text"></p>
-              <label class="option" id="st-attachments-option" hidden>
-                <input type="checkbox" id="st-attachments" checked />
-                <span><b>Include attachments</b><span class="option-note">Every job's photos, documents and measurement reports, in a second zip file. This can take much longer and use several gigabytes.</span></span>
+              <label class="option" id="attachments-option" hidden>
+                <input type="checkbox" id="attachments" checked />
+                <span><b>Include attachments</b><span class="option-note" id="attachments-note"></span></span>
+              </label>
+              <label class="option sub" id="links-only-option" hidden>
+                <input type="checkbox" id="links-only" />
+                <span><b>Save links only</b><span class="option-note">Don't download the files. The spreadsheet zip gets attachment_links.csv with a link to every file instead. The links open without signing in, but they stop working 3 days after the export.</span></span>
               </label>
               <button type="button" class="btn primary big" id="start">
                 <svg class="icon"><use href="#i-download" /></svg><span id="start-label">Export my data</span>

@@ -29,7 +29,7 @@ export const ACTIVE = new Set(["listing", "costs", "attachments"]);
 const COST_PREFIX = "cost:";
 
 // Settings that outlive an export; everything else in storage is run data.
-const SETTINGS = new Set(["apiKey", "company", "provider", "stTenant", "stAttachments"]);
+const SETTINGS = new Set(["apiKey", "company", "provider", "stTenant", "includeAttachments", "linksOnly"]);
 
 export async function clearRun(store) {
   const keys = Object.keys(await store.get(null)).filter((key) => !SETTINGS.has(key));

@@ -1,15 +1,25 @@
 import { AuthError, createClient, findOrCreateApiKey } from "./lib/hcp.js";
 import { ACTIVE } from "./lib/exporter.js";
 import { fileStore } from "./lib/blobs.js";
-import { ENTITIES, createServiceTitanClient, tenantsFromCookies } from "./lib/servicetitan.js";
+import { ENTITIES as ST_ENTITIES, createServiceTitanClient, tenantsFromCookies } from "./lib/servicetitan.js";
 import { createServiceTitanExporter } from "./lib/st-exporter.js";
+import { ENTITIES as JB_ENTITIES, SIGN_IN_URL as JB_URL, createJobberClient } from "./lib/jobber.js";
+import { createJobberExporter } from "./lib/jobber-exporter.js";
 
 const $ = (id) => document.getElementById(id);
 const HCP_URL = "https://pro.housecallpro.com/";
 const ST_URL = "https://go.servicetitan.com/";
+const PROVIDERS = new Set(["hcp", "servicetitan", "jobber"]);
+const SERVICE = { hcp: "Housecall Pro", servicetitan: "ServiceTitan", jobber: "Jobber" };
+// Platforms exported as whole-record searches plus optional attachments.
+// unit: what one step of the attachments phase covers.
+const SEARCHES = {
+  servicetitan: { entities: ST_ENTITIES, unit: "jobs" },
+  jobber: { entities: JB_ENTITIES, unit: "pages" },
+};
 
 const state = {
-  provider: "hcp", // hcp | servicetitan
+  provider: "hcp", // hcp | servicetitan | jobber
   apiKey: "",
   company: "",
   session: "pending", // pending | checking | ok | signed-out | unreachable
@@ -17,7 +27,10 @@ const state = {
   stTenants: [], // [{ tenant, host }] the browser is signed in to
   stTenant: "", // the chosen tenant
   stSession: "pending",
-  stAttachments: true, // also export every job's files, as a second zip
+  jbSession: "pending",
+  jbAccount: "", // the signed-in Jobber account's name
+  includeAttachments: true, // search platforms: also export files, as a second zip
+  linksOnly: false, // Jobber: save each file's link instead of downloading it
   run: null,
 };
 
@@ -38,27 +51,43 @@ function render() {
   const running = state.run && ACTIVE.has(state.run.status);
   // A running export pins the platform; otherwise show only this platform's run.
   if (running) state.provider = runProvider(state.run);
-  const st = state.provider === "servicetitan";
-  const run = runProvider(state.run) === state.provider ? state.run : null;
+  const provider = state.provider;
+  const st = provider === "servicetitan";
+  const jb = provider === "jobber";
+  const run = runProvider(state.run) === provider ? state.run : null;
 
   for (const input of $("platform").querySelectorAll("input")) {
-    input.checked = input.value === state.provider;
+    input.checked = input.value === provider;
     input.disabled = Boolean(running);
   }
-  const manualKey = !st && state.hcpKey === "manual";
+  const manualKey = provider === "hcp" && state.hcpKey === "manual";
   $("step-key").hidden = !manualKey;
-  $("step-session").hidden = st;
+  $("step-session").hidden = provider !== "hcp";
   $("step-st-session").hidden = !st;
-  $("export-num").textContent = st || !manualKey ? "2" : "3";
+  $("step-jb-session").hidden = !jb;
+  $("export-num").textContent = manualKey ? "3" : "2";
   $("start-label").textContent = "Export My Data";
   $("ready-text").textContent = st
     ? "This reads every job, estimate, customer, invoice, lead and payment. You'll get a zip file with a spreadsheet for each kind of record."
-    : "This reads every job and estimate, then each job's materials and miscellaneous costs. A large account can take several minutes. You'll get one zip file of spreadsheets: jobs, materials, miscellaneous items, estimates, and estimate options.";
-  $("st-attachments-option").hidden = !st;
-  $("st-attachments").checked = state.stAttachments;
+    : jb
+      ? "This reads every job, client, quote, invoice and request. You'll get a zip file with a spreadsheet for each kind of record. Jobber limits how fast its data can be read, so a large account can take half an hour or more."
+      : "This reads every job and estimate, then each job's materials and miscellaneous costs. A large account can take several minutes. You'll get one zip file of spreadsheets: jobs, materials, miscellaneous items, estimates, and estimate options.";
+  $("attachments-option").hidden = !SEARCHES[provider];
+  $("attachments").checked = state.includeAttachments;
+  // Only Jobber's links open without a sign-in (ServiceTitan's redirect to its login).
+  $("links-only-option").hidden = !jb || !state.includeAttachments;
+  $("links-only").checked = state.linksOnly;
+  $("attachments-note").textContent = jb
+    ? "Every job, client, quote, invoice and request's files and photos, in a second zip file. This can use several gigabytes."
+    : "Every job's photos, documents and measurement reports, in a second zip file. This can take much longer and use several gigabytes.";
 
   let ready;
-  if (st) {
+  if (jb) {
+    showView("step-jb-session", state.jbSession === "pending" ? "checking" : state.jbSession);
+    setStep("step-jb-session", state.jbSession === "ok" ? "done" : "current");
+    $("jb-account-name").textContent = state.jbAccount;
+    ready = state.jbSession === "ok";
+  } else if (st) {
     showView("step-st-session", state.stSession === "pending" ? "checking" : state.stSession);
     setStep("step-st-session", state.stSession === "ok" ? "done" : "current");
     const choice = stChoice();
@@ -107,9 +136,10 @@ function render() {
 // Each part: { key, label, state: pending|active|done|stopped, count, part
 // (0..1, or null when the total isn't known), detail, live }.
 
-function stParts(run) {
+function searchParts(provider, run) {
+  const { entities, unit } = SEARCHES[provider];
   const listing = run?.status === "listing";
-  const parts = ENTITIES.map((entity) => {
+  const parts = entities.map((entity) => {
     const progress = run?.entities?.[entity.key];
     const done = Boolean(progress?.done);
     const active = listing && !done && (run.current === entity.key || !run.current);
@@ -127,15 +157,17 @@ function stParts(run) {
     seenActive = true;
   }
 
-  // A run decides for itself; before one starts, the checkbox does.
-  if (!(run ? run.includeAttachments || run.attachments : state.stAttachments)) return parts;
+  // A run decides for itself; before one starts, the checkboxes do. Links
+  // come with the listing, so they get no row of their own.
+  const wanted = run ? (run.includeAttachments && !run.linksOnly) || run.attachments : state.includeAttachments && !(provider === "jobber" && state.linksOnly);
+  if (!wanted) return parts;
   const att = run?.attachments;
   const attachments = { key: "attachments", label: "Attachments", state: "pending", count: "", part: null, detail: "" };
   if (run?.status === "attachments" && att) {
     attachments.state = "active";
-    attachments.count = `${fmt(att.files)} file${att.files === 1 ? "" : "s"}`;
-    attachments.part = att.total ? att.done / att.total : 0;
-    attachments.detail = `${fmt(att.done)} of ${fmt(att.total)} jobs · ${megabytes(att.bytes)}`;
+    attachments.count = att.listed ? `${fmt(att.files)} of ${fmt(att.listed)} files` : `${fmt(att.files)} file${att.files === 1 ? "" : "s"}`;
+    attachments.part = att.listed ? Math.min(1, (att.files + att.failed) / att.listed) : att.total ? att.done / att.total : 0;
+    attachments.detail = `${fmt(att.done)} of ${fmt(att.total)} ${unit} · ${megabytes(att.bytes)}`;
     attachments.live = { current: run.current, preview: run.preview };
   } else if (run?.status === "done" && att) {
     attachments.state = "done";
@@ -181,7 +213,7 @@ function hcpParts(run) {
 // 0..1 across the whole export.
 function overallOf(provider, run, parts) {
   if (run?.status === "done") return 1;
-  if (provider === "servicetitan") {
+  if (SEARCHES[provider]) {
     const searches = parts.filter((part) => part.key !== "attachments");
     const attachments = parts.find((part) => part.key === "attachments");
     const share = attachments ? 0.5 : 1;
@@ -197,7 +229,7 @@ function overallOf(provider, run, parts) {
 }
 
 function partsOf(provider, run) {
-  return provider === "servicetitan" ? stParts(run) : hcpParts(run);
+  return SEARCHES[provider] ? searchParts(provider, run) : hcpParts(run);
 }
 
 function renderRunning(run) {
@@ -289,7 +321,7 @@ function capitalize(text) {
 }
 
 function renderNotice(run) {
-  const service = runProvider(run) === "servicetitan" ? "ServiceTitan" : "Housecall Pro";
+  const service = SERVICE[runProvider(run)];
   const notice = run.notice;
   const seconds = notice ? Math.ceil((notice.until - Date.now()) / 1000) : 0;
   $("run-notice").hidden = seconds <= 0;
@@ -317,11 +349,15 @@ function renderDone(run) {
   const two = Boolean(run.attachments);
   $("done-what").textContent = two ? "zip files are" : "zip file is";
   $("done-file").textContent = run.fileName ? names.join("\n") : building ? `Putting your zip file${two ? "s" : ""} together…` : "";
-  if (runProvider(run) === "servicetitan") {
-    const counts = ENTITIES.map((entity) => `${fmt(run.entities[entity.key].count)} ${entity.label}`).join(", ");
+  if (SEARCHES[runProvider(run)]) {
+    const counts = SEARCHES[runProvider(run)].entities.map((entity) => `${fmt(run.entities[entity.key].count)} ${entity.label}`).join(", ");
     const att = run.attachments;
-    const files = att ? ` and ${fmt(att.files)} attachments (${megabytes(att.bytes)})` : "";
-    const failed = att?.failed ? ` ${fmt(att.failed)} attachments or job listings couldn't be downloaded; attachments.csv lists them.` : "";
+    const files = att
+      ? ` and ${fmt(att.files)} attachments (${megabytes(att.bytes)})`
+      : run.links
+        ? ` and links to ${fmt(run.links.files)} attachments (in attachment_links.csv; they stop working around ${new Date(run.startedAt + 3 * 86_400_000).toLocaleDateString()})`
+        : "";
+    const failed = att?.failed ? ` ${fmt(att.failed)} attachments${runProvider(run) === "servicetitan" ? " or job listings" : ""} couldn't be downloaded; attachments.csv lists them.` : "";
     const skipped = att?.skipped ? ` ${fmt(att.skipped)} pricebook and supplier product photos were left out.` : "";
     $("done-summary").textContent = `Exported ${counts}${files}.${skipped}${failed}`;
   } else {
@@ -353,9 +389,8 @@ function renderError(run, ready) {
   if (kind === "api_key") {
     $("error-text").textContent = "Housecall Pro stopped accepting your API key. It may have been deleted. Add a new one in step 1.";
     action.textContent = "Enter a New Key";
-  } else if (kind === "session" && runProvider(run) === "servicetitan") {
-    $("error-text").textContent =
-      "You were signed out of ServiceTitan. Sign in again (step 1), then continue. Pages already read are kept.";
+  } else if (kind === "session" && SEARCHES[runProvider(run)]) {
+    $("error-text").textContent = `You were signed out of ${SERVICE[runProvider(run)]}. Sign in again (step 1), then continue. Pages already read are kept.`;
     action.textContent = "Continue";
     action.disabled = !ready;
   } else if (kind === "session") {
@@ -377,7 +412,7 @@ function megabytes(bytes) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
 
-// --- ServiceTitan zip ----------------------------------------------------------
+// --- Search exports' zips ------------------------------------------------------
 // Built here, not in the worker: the zip is assembled from stored Blobs and
 // handed to chrome.downloads as a Blob URL, which a worker can't create.
 
@@ -386,13 +421,16 @@ const store = {
   set: (items) => chrome.storage.local.set(items),
   remove: (keys) => chrome.storage.local.remove(keys),
 };
-const stArchiver = createServiceTitanExporter({ store, files: fileStore, makeClient: () => null });
+const archivers = {
+  servicetitan: createServiceTitanExporter({ store, files: fileStore, makeClient: () => null }),
+  jobber: createJobberExporter({ store, files: fileStore, makeClient: () => null }),
+};
 let building = false;
 const blobUrls = new Map(); // download id -> object URL, revoked when it finishes
 
 // Two downloads: the spreadsheets, then (when the run fetched them) the
 // attachments. The data zip is small; the attachments one can be gigabytes.
-async function saveStZip() {
+async function saveZips() {
   if (building) return;
   building = true;
   render();
@@ -403,9 +441,10 @@ async function saveStZip() {
       blobUrls.set(id, url);
       return id;
     };
-    const data = await stArchiver.archive();
+    const archiver = archivers[state.run.provider];
+    const data = await archiver.archive();
     const downloadId = await download(data);
-    const attachments = await stArchiver.attachmentsArchive();
+    const attachments = await archiver.attachmentsArchive();
     if (attachments) await download(attachments);
     const { run } = await store.get("run");
     await store.set({ run: { ...run, downloadId, fileName: data.fileName, attachmentsFileName: attachments?.fileName ?? "" } });
@@ -415,9 +454,9 @@ async function saveStZip() {
   }
 }
 
-function maybeSaveStZip() {
+function maybeSaveZips() {
   const run = state.run;
-  if (run?.provider === "servicetitan" && run.status === "done" && !run.downloadId) saveStZip();
+  if (archivers[run?.provider] && run.status === "done" && !run.downloadId) saveZips();
 }
 
 chrome.downloads.onChanged.addListener(({ id, state: change }) => {
@@ -437,9 +476,12 @@ function send(type, extra = {}) {
 }
 
 function startExport() {
+  if (state.provider === "jobber") {
+    return send("start", { provider: "jobber", includeAttachments: state.includeAttachments, linksOnly: state.includeAttachments && state.linksOnly });
+  }
   if (state.provider !== "servicetitan") return send("start");
   const choice = stChoice();
-  if (choice) send("start", { provider: "servicetitan", tenant: choice.tenant, host: choice.host, includeAttachments: state.stAttachments });
+  if (choice) send("start", { provider: "servicetitan", tenant: choice.tenant, host: choice.host, includeAttachments: state.includeAttachments });
 }
 
 function normalizeKey(raw) {
@@ -567,10 +609,33 @@ function renderTenantOptions() {
   );
 }
 
+let jbChecking = null;
+async function checkJbSession() {
+  if (jbChecking) return jbChecking;
+  if (state.jbSession !== "ok") {
+    state.jbSession = "pending";
+    render();
+  }
+  jbChecking = (async () => {
+    try {
+      state.jbAccount = (await createJobberClient({ delayMs: 0 }).account())?.name ?? "";
+      state.jbSession = "ok";
+    } catch (err) {
+      state.jbSession = err instanceof AuthError ? "signed-out" : "unreachable";
+    } finally {
+      jbChecking = null;
+      render();
+    }
+  })();
+  return jbChecking;
+}
+
 // Recheck whichever sign-in the chosen platform needs.
 function recheck() {
   if (state.provider === "servicetitan") {
     if (state.stSession !== "ok") checkStSession();
+  } else if (state.provider === "jobber") {
+    if (state.jbSession !== "ok") checkJbSession();
   } else if (state.session !== "ok") {
     checkSession();
   }
@@ -594,15 +659,22 @@ $("open-hcp").addEventListener("click", () => chrome.tabs.create({ url: HCP_URL 
 $("session-retry").addEventListener("click", checkSession);
 $("open-st").addEventListener("click", () => chrome.tabs.create({ url: ST_URL }));
 $("st-session-retry").addEventListener("click", checkStSession);
+$("open-jb").addEventListener("click", () => chrome.tabs.create({ url: JB_URL }));
+$("jb-session-retry").addEventListener("click", checkJbSession);
 $("st-tenant-select").addEventListener("change", async (event) => {
   state.stTenant = event.target.value;
   await chrome.storage.local.set({ stTenant: state.stTenant });
   state.stSession = "pending";
   checkStSession();
 });
-$("st-attachments").addEventListener("change", async (event) => {
-  state.stAttachments = event.target.checked;
-  await chrome.storage.local.set({ stAttachments: state.stAttachments });
+$("attachments").addEventListener("change", async (event) => {
+  state.includeAttachments = event.target.checked;
+  await chrome.storage.local.set({ includeAttachments: state.includeAttachments });
+  render();
+});
+$("links-only").addEventListener("change", async (event) => {
+  state.linksOnly = event.target.checked;
+  await chrome.storage.local.set({ linksOnly: state.linksOnly });
   render();
 });
 for (const input of $("platform").querySelectorAll("input")) {
@@ -621,7 +693,7 @@ $("cancel").addEventListener("click", () => send("cancel"));
 $("retry-failed").addEventListener("click", () => send("retry"));
 $("error-action").addEventListener("click", errorAction);
 $("show-file").addEventListener("click", () => send("showFile"));
-$("download-again").addEventListener("click", () => (state.run?.provider === "servicetitan" ? saveStZip() : send("download")));
+$("download-again").addEventListener("click", () => (archivers[state.run?.provider] ? saveZips() : send("download")));
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
@@ -629,14 +701,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if ("apiKey" in changes) state.apiKey = changes.apiKey.newValue ?? "";
   if ("company" in changes) state.company = changes.company.newValue ?? "";
   if ("provider" in changes && changes.provider.newValue) {
-    state.provider = changes.provider.newValue === "servicetitan" ? "servicetitan" : "hcp";
+    state.provider = PROVIDERS.has(changes.provider.newValue) ? changes.provider.newValue : "hcp";
     recheck();
   }
   render();
-  maybeSaveStZip();
+  maybeSaveZips();
 });
 
-// Coming back from the Housecall Pro or ServiceTitan tab after signing in.
+// Coming back from the platform's tab after signing in.
 window.addEventListener("focus", recheck);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) recheck();
@@ -651,15 +723,15 @@ setInterval(() => {
   if (state.run && ACTIVE.has(state.run.status)) render();
 }, 1000);
 
-const stored = await chrome.storage.local.get(["apiKey", "company", "run", "provider", "stTenant", "stAttachments"]);
+const stored = await chrome.storage.local.get(["apiKey", "company", "run", "provider", "stTenant", "includeAttachments", "linksOnly"]);
 state.apiKey = stored.apiKey ?? "";
 state.company = stored.apiKey ? (stored.company ?? "") : "";
 state.run = stored.run ?? null;
-state.provider = stored.provider === "servicetitan" ? "servicetitan" : "hcp";
+state.provider = PROVIDERS.has(stored.provider) ? stored.provider : "hcp";
 state.stTenant = stored.stTenant ?? "";
-state.stAttachments = stored.stAttachments !== false;
+state.includeAttachments = stored.includeAttachments !== false;
+state.linksOnly = stored.linksOnly === true;
 render();
-if (state.provider === "hcp") checkSession();
-if (state.provider === "servicetitan") checkStSession();
+recheck();
 if (state.run && ACTIVE.has(state.run.status)) send("resume");
-maybeSaveStZip();
+maybeSaveZips();

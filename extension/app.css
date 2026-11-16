@@ -203,7 +203,7 @@ h1 {
 
 .platform-options {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   border: 1px solid var(--hair-strong);
 }
 
@@ -460,6 +460,11 @@ input[type="text"]:focus,
   margin-top: 0.2rem;
   font-size: 0.9rem;
   color: var(--ink-muted);
+}
+
+.option.sub {
+  margin-top: -0.5rem;
+  margin-left: 1.8rem;
 }
 
 /* Buttons */

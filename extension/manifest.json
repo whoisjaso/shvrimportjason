@@ -2,11 +2,11 @@
   "manifest_version": 3,
   "name": "SHVR Data Export",
   "short_name": "SHVR Export",
-  "version": "1.1.0",
-  "description": "Download your jobs, estimates, customers and more from Housecall Pro or ServiceTitan as spreadsheets.",
+  "version": "1.2.0",
+  "description": "Download your jobs, estimates, customers and more from Housecall Pro, ServiceTitan or Jobber as spreadsheets.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "unlimitedStorage", "downloads", "cookies"],
-  "host_permissions": ["https://api.housecallpro.com/*", "https://pro.housecallpro.com/*", "https://*.servicetitan.com/*"],
+  "host_permissions": ["https://api.housecallpro.com/*", "https://pro.housecallpro.com/*", "https://*.servicetitan.com/*", "https://api.getjobber.com/*", "https://jobber.s3.amazonaws.com/*", "https://jobber-production-general-uploads.s3.amazonaws.com/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

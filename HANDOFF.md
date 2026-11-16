@@ -1,6 +1,6 @@
 # Handoff: SHVR Data Export → SHVR integration
 
-> Update 2026-11-13: the extension is now **SHVR Data Export**, with ServiceTitan support (searches plus optional job attachments, no API key) beside Housecall Pro, and the SHVR visual theme. README.md's "Chrome extension" section documents the ServiceTitan endpoints (attachments are listed per job and downloaded 32 at a time) and the two-zip layout (data, then attachments). The Housecall Pro details below are unchanged; zip files are now named `SHVR Export - <company> - <date>.zip`.
+> Update 2026-11-16: the extension is now **SHVR Data Export**, with ServiceTitan support (searches plus optional job attachments, no API key) and Jobber support (GraphQL with the browser's session; jobs, clients, quotes, invoices, requests and their files) beside Housecall Pro, and the SHVR visual theme. README.md's "Chrome extension" section documents the ServiceTitan and Jobber endpoints, how attachments are listed and downloaded, and the two-zip layout (data, then attachments). The Housecall Pro details below are unchanged; zip files are now named `SHVR Export - <company> - <date>.zip`.
 
 Read this before building the SHVR side. It covers what exists in this repo, what has been proven against a live Housecall Pro account, the data contract, and the seams an integration should use.
 
