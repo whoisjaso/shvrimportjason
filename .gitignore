@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.venv/
+.env
+.cursor/
+cookies/
+*.cookie
+*.key
+exports/
+dist/
+node_modules/
+.DS_Store

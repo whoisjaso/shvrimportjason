@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SHVR Data Export</title>
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <svg width="0" height="0" class="sprite" aria-hidden="true">
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.5" /><circle cx="12" cy="12" r="9" /></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8M17 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4" /></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" /></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4.5v10M7.5 10.5l4.5 4.5 4.5-4.5M5 19.5h14" /></symbol>
+    </svg>
+
+    <svg class="waves" viewBox="0 0 1440 520" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M0 330 C 240 250, 420 420, 720 330 S 1200 210, 1440 300" />
+      <path d="M0 350 C 260 270, 440 440, 720 352 S 1190 232, 1440 322" />
+      <path d="M0 372 C 280 292, 460 458, 720 374 S 1180 254, 1440 344" />
+      <path d="M0 394 C 300 316, 480 476, 720 396 S 1170 276, 1440 366" />
+      <path d="M0 418 C 320 340, 500 494, 720 420 S 1160 300, 1440 390" />
+      <path d="M0 444 C 340 366, 520 512, 720 446 S 1150 326, 1440 416" />
+    </svg>
+
+    <header class="topbar">
+      <img src="brand/shvr-wordmark.svg" alt="SHVR" class="wordmark" width="92" height="24" />
+      <span class="topbar-label">Data Export</span>
+    </header>
+
+    <main class="shell">
+      <header class="hero">
+        <h1>Bring your data <span class="pop">to SHVR.</span></h1>
+        <p>Download your jobs, estimates, customers and more from the software you use today. Everything comes in one zip file of spreadsheets.</p>
+      </header>
+
+      <div class="workspace">
+      <fieldset class="platform" id="platform">
+        <legend class="visually-hidden">Software</legend>
+        <div class="platform-options">
+          <label><input type="radio" name="provider" value="hcp" checked /> Housecall Pro</label>
+          <label><input type="radio" name="provider" value="servicetitan" /> ServiceTitan</label>
+          <label><input type="radio" name="provider" value="jobber" /> Jobber</label>
+        </div>
+      </fieldset>
+
+      <section class="panel" aria-label="Export">
+      <ol class="steps">
+        <!-- Jobber step 1: sign-in (shown only for Jobber) -->
+        <li class="step" id="step-jb-session" data-state="current" hidden>
+          <span class="marker" aria-hidden="true"><span class="num">1</span><svg class="icon"><use href="#i-check" /></svg></span>
+          <div class="step-body">
+            <h2>Sign In to Jobber</h2>
+            <p data-view="checking" hidden><span class="spinner" aria-hidden="true"></span> Checking…</p>
+            <p data-view="ok" hidden>You're signed in to Jobber as <strong id="jb-account-name"></strong>.</p>
+            <div data-view="signed-out" hidden>
+              <p>Sign in to Jobber in this browser, then come back to this tab. This page notices when you're signed in.</p>
+              <button type="button" class="btn" id="open-jb">Open Jobber<svg class="icon"><use href="#i-external" /></svg></button>
+            </div>
+            <div data-view="unreachable" hidden>
+              <p class="message error">Couldn't reach Jobber. Check your internet connection.</p>
+              <button type="button" class="btn" id="jb-session-retry">Check Again</button>
+            </div>
+          </div>
+        </li>
+
+        <!-- ServiceTitan step 1: sign-in (shown only for ServiceTitan) -->
+        <li class="step" id="step-st-session" data-state="current" hidden>
+          <span class="marker" aria-hidden="true"><span class="num">1</span><svg class="icon"><use href="#i-check" /></svg></span>
+          <div class="step-body">
+            <h2>Sign In to ServiceTitan</h2>
+            <p data-view="checking" hidden><span class="spinner" aria-hidden="true"></span> Checking…</p>
+            <div data-view="ok" hidden>
+              <p>You're signed in to ServiceTitan as <strong id="st-tenant-name"></strong>.</p>
+              <label class="tenant-pick" id="st-tenant-pick" hidden>
+                Account to Export
+                <select id="st-tenant-select"></select>
+              </label>
+            </div>
+            <div data-view="signed-out" hidden>
+              <p>Sign in to ServiceTitan in this browser, then come back to this tab. This page notices when you're signed in.</p>
+              <button type="button" class="btn" id="open-st">Open ServiceTitan<svg class="icon"><use href="#i-external" /></svg></button>
+            </div>
+            <div data-view="unreachable" hidden>
+              <p class="message error">Couldn't reach ServiceTitan. Check your internet connection.</p>
+              <button type="button" class="btn" id="st-session-retry">Check Again</button>
+            </div>
+          </div>
+        </li>
+
+        <!-- Housecall Pro step 1: sign-in, then the API key is found or made automatically -->
+        <li class="step" id="step-session" data-state="current">
+          <span class="marker" aria-hidden="true"><span class="num">1</span><svg class="icon"><use href="#i-check" /></svg></span>
+          <div class="step-body">
+            <h2>Sign In to Housecall Pro</h2>
+            <p data-view="checking" hidden><span class="spinner" aria-hidden="true"></span> Checking…</p>
+            <p data-view="connecting" hidden><span class="spinner" aria-hidden="true"></span> Setting up access to your account…</p>
+            <p data-view="ok" hidden>Connected to <strong id="hcp-company"></strong>.</p>
+            <p data-view="signed-in" hidden>You're signed in to Housecall Pro in this browser.</p>
+            <div data-view="signed-out" hidden>
+              <p>Sign in to Housecall Pro in this browser, then come back to this tab. This page notices when you're signed in.</p>
+              <button type="button" class="btn" id="open-hcp">Open Housecall Pro<svg class="icon"><use href="#i-external" /></svg></button>
+            </div>
+            <div data-view="unreachable" hidden>
+              <p class="message error">Couldn't reach Housecall Pro. Check your internet connection.</p>
+              <button type="button" class="btn" id="session-retry">Check Again</button>
+            </div>
+          </div>
+        </li>
+
+        <!-- Housecall Pro step 2: only when the key couldn't be set up automatically -->
+        <li class="step" id="step-key" data-state="current" hidden>
+          <span class="marker" aria-hidden="true"><span class="num">2</span><svg class="icon"><use href="#i-check" /></svg></span>
+          <div class="step-body">
+            <h2>Add Your API Key</h2>
+
+            <div data-view="form">
+              <p>We couldn't set up an API key for you. Only an admin can make one, and your plan needs to include the API (MAX plan). If you can, go to <b>My Apps</b> › <b>All Apps</b> › <b>API Key Management</b>, click <b>Generate API Key</b>, choose <b>Read-only</b>, then copy the key and paste it here.</p>
+              <form id="key-form" class="key-form" autocomplete="off">
+                <label for="key-input">API Key</label>
+                <div class="field-row">
+                  <input id="key-input" name="key" type="text" spellcheck="false" autocapitalize="off" placeholder="Paste your API key" required />
+                  <button type="submit" class="btn primary" id="key-save">Save Key</button>
+                </div>
+                <p class="message error" id="key-error" role="alert" hidden></p>
+              </form>
+            </div>
+
+            <div data-view="saved" hidden>
+              <p>Connected to <strong id="company-name"></strong>.</p>
+              <button type="button" class="link" id="key-change">Use a Different Key</button>
+            </div>
+          </div>
+        </li>
+
+        <!-- Step 3: Export -->
+        <li class="step" id="step-export" data-state="waiting">
+          <span class="marker" aria-hidden="true"><span class="num" id="export-num">3</span><svg class="icon"><use href="#i-check" /></svg></span>
+          <div class="step-body">
+            <h2 class="export-heading">Export <span class="spinner" id="export-spinner" aria-label="Export in progress" hidden></span></h2>
+
+            <p data-view="pending" class="muted">Finish the steps above first.</p>
+
+            <div data-view="ready" hidden>
+              <p id="ready-text"></p>
+              <label class="option" id="attachments-option" hidden>
+                <input type="checkbox" id="attachments" checked />
+                <span><b>Include attachments</b><span class="option-note" id="attachments-note"></span></span>
+              </label>
+              <label class="option sub" id="links-only-option" hidden>
+                <input type="checkbox" id="links-only" />
+                <span><b>Save links only</b><span class="option-note">Don't download the files. The spreadsheet zip gets attachment_links.csv with a link to every file instead. The links open without signing in, but they stop working 3 days after the export.</span></span>
+              </label>
+              <button type="button" class="btn primary big" id="start">
+                <svg class="icon"><use href="#i-download" /></svg><span id="start-label">Export my data</span>
+              </button>
+            </div>
+
+            <div data-view="running" hidden>
+              <div class="overall">
+                <div class="bar" role="progressbar" id="run-bar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Overall progress">
+                  <span class="fill"></span>
+                </div>
+                <span class="overall-pct" id="run-pct">0%</span>
+              </div>
+              <p class="notice" id="run-notice" hidden></p>
+              <p class="hint">Keep this tab open until it finishes. You can use other tabs in the meantime.</p>
+              <button type="button" class="btn stop" id="cancel">Stop Export</button>
+            </div>
+
+            <div data-view="done" hidden>
+              <p class="done-line"><svg class="icon ok"><use href="#i-check" /></svg><span>Done. Your <span id="done-what">zip file is</span> in your <b>Downloads</b> folder.</span></p>
+              <p class="file" id="done-file"></p>
+              <p class="summary" id="done-summary"></p>
+              <div class="actions">
+                <button type="button" class="btn primary" id="show-file"><svg class="icon"><use href="#i-folder" /></svg>Show in Folder</button>
+                <button type="button" class="btn" id="download-again">Download Again</button>
+              </div>
+              <div class="failed" id="failed" hidden>
+                <p class="message error"><svg class="icon"><use href="#i-alert" /></svg><span id="failed-text"></span></p>
+                <button type="button" class="btn" id="retry-failed">Try Those Jobs Again</button>
+                <details>
+                  <summary>Show Which Jobs</summary>
+                  <ul id="failed-list"></ul>
+                </details>
+              </div>
+              <button type="button" class="link" id="start-over">Start a New Export</button>
+            </div>
+
+            <div data-view="error" hidden>
+              <p class="message error"><svg class="icon"><use href="#i-alert" /></svg><span id="error-text"></span></p>
+              <div class="actions">
+                <button type="button" class="btn primary" id="error-action">Try Again</button>
+                <button type="button" class="link" id="error-start-over">Start Over</button>
+              </div>
+            </div>
+
+            <div data-view="canceled" hidden>
+              <p>Export stopped. Nothing was downloaded.</p>
+              <button type="button" class="btn primary" id="start-again">Start Again</button>
+            </div>
+          </div>
+        </li>
+      </ol>
+      </section>
+
+      <aside class="parts" id="parts" aria-labelledby="parts-title" hidden>
+        <h2 class="parts-title" id="parts-title">What Gets Exported</h2>
+        <ol class="parts-list" id="parts-list"></ol>
+        <template id="part-row">
+          <li class="part" data-state="pending">
+            <span class="part-mark" aria-hidden="true"><svg class="icon"><use href="#i-check" /></svg></span>
+            <div class="part-body">
+              <div class="part-head">
+                <span class="part-label"></span>
+                <span class="part-count"></span>
+              </div>
+              <div class="part-progress">
+                <div class="part-progress-inner">
+                  <div class="bar small" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span class="fill"></span></div>
+                  <p class="part-detail"></p>
+                  <div class="part-live" hidden>
+                    <figure class="part-thumb"><img alt="" hidden /><span class="part-thumb-empty">No photo yet</span></figure>
+                    <div class="part-live-text">
+                      <p class="part-file"></p>
+                      <p class="part-thumb-name"></p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </li>
+        </template>
+      </aside>
+      </div>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
