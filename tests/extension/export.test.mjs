@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import { createExporter, archiveName } from "../../extension/lib/exporter.js";
 import { AuthError, RequestError, createClient } from "../../extension/lib/hcp.js";
-import { MISC_COLUMNS, materialRow, miscRow, toCsv } from "../../extension/lib/rows.js";
+import { LINE_ITEM_COLUMNS, MISC_COLUMNS, lineItemRow, materialRow, miscRow, toCsv } from "../../extension/lib/rows.js";
 import { memoryStore, unzip } from "./helpers.mjs";
 
 // --- hcp client --------------------------------------------------------------
@@ -140,6 +140,7 @@ function fakeClient({
   pages = [JOBS.slice(0, 2), JOBS.slice(2)],
   estimatePages = [ESTIMATES.slice(0, 1), ESTIMATES.slice(1)],
   session = true,
+  lineItemFailures = {},
 } = {}) {
   const fetched = [];
   return {
@@ -158,6 +159,10 @@ function fakeClient({
         const failure = costFailures[jobId];
         if (failure) throw failure;
         return jobId === "job_a" ? [{ uuid: "jim_1", name: "Paint", quantity: "1.0", unit_cost: 350 }] : [];
+      },
+      lineItems: async (jobId) => {
+        if (lineItemFailures[jobId]) throw lineItemFailures[jobId];
+        return jobId === "job_a" ? [{ id: "li_1", name: "Repaint", kind: "labor", quantity: 2, unit_price: 150050, amount: 300100, taxable: false, order_index: 0 }] : [];
       },
       miscellaneousItems: async (jobId) => (jobId === "job_b" ? [{ uuid: "mcli_1", name: "Sub", unit_cost: 4000, quantity: 1 }] : []),
     },
@@ -243,6 +248,57 @@ test("one refused job at the start is skipped, not taken for another company", a
   assert.equal(store.data.run.status, "done");
   assert.equal(store.data.run.done, 2);
   assert.deepEqual(store.data.run.failed.map((job) => job.job_id), ["job_a"]);
+});
+
+test("what was sold on each job goes into job_line_items.csv, in dollars", async () => {
+  const store = memoryStore({ apiKey: "k" });
+  const exporter = exporterFor(store, fakeClient());
+  await exporter.start();
+  const { bytes } = await exporter.archive();
+  assert.equal(unzip(bytes, "job_line_items.csv"), `\uFEFF${LINE_ITEM_COLUMNS.join(",")}\r\njob_a,1001,li_1,0,labor,Repaint,,2,,1500.50,,3001.00,false,,\r\n`);
+  assert.equal(unzip(bytes, "line_items_status.csv").replace("\uFEFF", "").trim().split("\r\n")[1], "job,complete,3,1,");
+  assert.equal(lineItemRow("job_a", "1001", { id: "li_9", unit_price: null }).unit_price, "");
+});
+
+test("a job whose line items can't be read keeps its costs; the file is marked partial", async () => {
+  const store = memoryStore({ apiKey: "k" });
+  const exporter = exporterFor(store, fakeClient({ lineItemFailures: { job_b: new RequestError("/jobs/job_b/line_items returned HTTP 500.", 500) } }));
+  await exporter.start();
+  assert.equal(store.data.run.status, "done");
+  assert.equal(store.data.run.done, 3);
+  assert.deepEqual(store.data.run.failed, []);
+  const { bytes } = await exporter.archive();
+  assert.equal(unzip(bytes, "miscellaneous_items.csv").split("\r\n")[1].startsWith("job_b,1002,mcli_1"), true);
+  assert.equal(unzip(bytes, "line_items_status.csv").replace("\uFEFF", "").trim().split("\r\n")[1], "job,partial,2,1,/jobs/job_b/line_items returned HTTP 500.");
+});
+
+test("line items refused for every job stop being asked for after three tries", async () => {
+  const store = memoryStore({ apiKey: "k" });
+  const refusal = () => new RequestError("HTTP 404", 404);
+  const jobs = Array.from({ length: 5 }, (_, i) => ({ id: `job_${i}`, invoice_number: String(i) }));
+  const fake = fakeClient({ pages: [jobs], lineItemFailures: Object.fromEntries(jobs.map((job) => [job.id, refusal()])) });
+  let asked = 0;
+  const lineItems = fake.client.lineItems;
+  fake.client.lineItems = async (jobId) => {
+    asked += 1;
+    return lineItems(jobId);
+  };
+  const exporter = exporterFor(store, fake);
+  await exporter.start();
+  assert.equal(store.data.run.done, 5);
+  assert.equal(asked, 3);
+  const { bytes } = await exporter.archive();
+  assert.equal(unzip(bytes, "line_items_status.csv").replace("\uFEFF", "").trim().split("\r\n")[1], "job,unavailable,0,0,HTTP 404");
+});
+
+test("the line item list is read from the public API with the key", async () => {
+  const { fetch, calls } = fakeFetch([{ body: { object: "list", data: [{ id: "li_1" }, null] } }, { body: { line_items: [{ id: "li_2" }] } }, { body: { object: "list" } }]);
+  const client = createClient({ apiKey: "k", fetch, delayMs: 0 });
+  assert.deepEqual(await client.lineItems("job_1"), [{ id: "li_1" }]);
+  assert.deepEqual(await client.lineItems("job_1"), [{ id: "li_2" }]);
+  await assert.rejects(client.lineItems("job_1"), RequestError);
+  assert.equal(calls[0].url, "https://api.housecallpro.com/jobs/job_1/line_items");
+  assert.equal(calls[0].init.headers.Authorization, "Token k");
 });
 
 test("signed-out browser stops before any job is read", async () => {

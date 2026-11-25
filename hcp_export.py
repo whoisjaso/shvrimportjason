@@ -104,6 +104,28 @@ MATERIAL_COLUMNS = [
     "pricebook_material_uuid",
 ]
 
+LINE_ITEM_COLUMNS = [
+    "job_id",
+    "invoice_number",
+    "line_item_id",
+    "order_index",
+    "kind",
+    "name",
+    "description",
+    "quantity",
+    "unit_of_measure",
+    "unit_price",
+    "unit_cost",
+    "amount",
+    "taxable",
+    "service_item_id",
+    "service_item_type",
+]
+
+LINE_ITEM_STATUS_COLUMNS = ["record_type", "status", "records", "line_items", "error"]
+# After this many line item failures with no success, stop asking.
+LINE_ITEM_PROBE = 3
+
 MISC_COLUMNS = [
     "job_id",
     "invoice_number",
@@ -338,6 +360,15 @@ class Housecall:
     def miscellaneous_items(self, job_id: str) -> list[dict]:
         return _list_data(self._private(f"/alpha/jobs/{urllib.parse.quote(job_id, safe='')}/miscellaneous_items"))
 
+    def line_items(self, job_id: str) -> list[dict]:
+        """What was sold on one job, from the public API."""
+        body = self._public(f"/jobs/{urllib.parse.quote(job_id, safe='')}/line_items")
+        if isinstance(body, dict):
+            body = body.get("data") if isinstance(body.get("data"), list) else body.get("line_items")
+        if not isinstance(body, list):
+            raise RequestError("The response has no line item list.")
+        return [row for row in body if isinstance(row, dict)]
+
     def _public(self, path: str) -> object:
         headers = {
             "Authorization": f"Token {self.api_key}",
@@ -524,6 +555,28 @@ def misc_row(job_id: str, invoice_number: str, item: dict) -> dict:
     }
 
 
+def line_item_row(job_id: str, invoice_number: str, item: dict) -> dict:
+    taxable = item.get("taxable")
+    quantity = decimal_or_none(item.get("quantity"))
+    return {
+        "job_id": job_id,
+        "invoice_number": invoice_number,
+        "line_item_id": _get(item, "id"),
+        "order_index": _get(item, "order_index"),
+        "kind": _get(item, "kind"),
+        "name": _get(item, "name"),
+        "description": _get(item, "description"),
+        "quantity": "" if quantity is None else f"{quantity.normalize():f}",
+        "unit_of_measure": _get(item, "unit_of_measure"),
+        "unit_price": dollars(item.get("unit_price")),
+        "unit_cost": dollars(item.get("unit_cost")),
+        "amount": dollars(item.get("amount")),
+        "taxable": str(taxable).lower() if isinstance(taxable, bool) else _get(item, "taxable"),
+        "service_item_id": _get(item, "service_item_id"),
+        "service_item_type": _get(item, "service_item_type"),
+    }
+
+
 def _people(record: dict) -> list[dict]:
     return [person for person in record.get("assigned_employees") or [] if isinstance(person, dict)]
 
@@ -655,6 +708,10 @@ def export(client: Housecall, out_dir: Path, fresh: bool = False, limit: int | N
         say(f"Resuming: {len(jobs) - len(pending)} jobs already fetched, {len(pending)} to go.")
 
     failures: list[tuple[str, str]] = []
+    # Line items are extra: a job whose line items can't be read keeps its costs.
+    sold_ok = sum(1 for record in done.values() if isinstance(record.get("line_items"), list))
+    sold_failed = 0
+    sold_error = ""
     with progress_path.open("a", encoding="utf-8") as progress:
         for index, job in enumerate(pending, start=1):
             job_id = job["id"]
@@ -668,6 +725,15 @@ def export(client: Housecall, out_dir: Path, fresh: bool = False, limit: int | N
                 note(f"[{index}/{len(pending)}] {job_id} failed: {err}")
                 continue
             record = {"job_id": job_id, "materials": materials, "miscellaneous_items": items}
+            if sold_ok or sold_failed < LINE_ITEM_PROBE:
+                try:
+                    record["line_items"] = client.line_items(job_id)
+                    sold_ok += 1
+                except AuthError:
+                    raise
+                except RequestError as err:
+                    sold_failed += 1
+                    sold_error = str(err)
             progress.write(json.dumps(record) + "\n")
             progress.flush()
             done[job_id] = record
@@ -693,6 +759,32 @@ def export(client: Housecall, out_dir: Path, fresh: bool = False, limit: int | N
             for item in record["miscellaneous_items"]
         ),
     )
+    with_items = [record for record in ordered if isinstance(record.get("line_items"), list)]
+    line_item_count = write_csv(
+        out_dir / "job_line_items.csv",
+        LINE_ITEM_COLUMNS,
+        (
+            line_item_row(record["job_id"], invoice_numbers[record["job_id"]], item)
+            for record in with_items
+            for item in record["line_items"]
+        ),
+    )
+    whole = len(with_items) == len(ordered)
+    status = "complete" if whole else "partial" if with_items else "unavailable"
+    write_csv(
+        out_dir / "line_items_status.csv",
+        LINE_ITEM_STATUS_COLUMNS,
+        [
+            {
+                "record_type": "job",
+                "status": status,
+                "records": len(with_items),
+                "line_items": line_item_count,
+                "error": "" if whole else sold_error or "Some jobs were exported before line items were read.",
+            }
+        ],
+    )
+    say(f"Wrote {line_item_count} line items to {out_dir / 'job_line_items.csv'} ({status})")
     say(f"Wrote {materials_count} materials to {out_dir / 'materials.csv'}")
     say(f"Wrote {misc_count} miscellaneous items to {out_dir / 'miscellaneous_items.csv'}")
 

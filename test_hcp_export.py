@@ -78,6 +78,16 @@ MISC = {
 }
 
 
+LINE_ITEMS = {
+    "job_a": [
+        {"id": "li_1", "name": "Exterior repaint", "kind": "labor", "quantity": 2.0, "unit_price": 150050, "unit_cost": 0, "amount": 300100, "taxable": False, "order_index": 0},
+        {"id": "li_2", "name": "Primer", "kind": "materials", "quantity": 1.5, "unit_price": 2000, "amount": 3000, "taxable": True, "order_index": 1},
+    ],
+    "job_b": [],
+    "job_c": [{"id": "li_3", "name": "Trim", "quantity": 1, "unit_price": 5000, "amount": 5000}],
+}
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     state: dict = {}
@@ -97,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(401, {"error": "unauthorized"})
 
         if url.path == "/company":
-            return self._json(200, {"id": "org_1", "name": "T1P Richmond"})
+            return self._json(200, {"id": "org_1", "name": "Example Painting Co"})
         if url.path in ("/jobs", "/estimates"):
             resource = url.path[1:]
             records = JOBS if resource == "jobs" else ESTIMATES
@@ -106,6 +116,11 @@ class Handler(BaseHTTPRequestHandler):
             chunk = records[(page - 1) * size : page * size]
             pages = -(-len(records) // size)
             return self._json(200, {resource: chunk, "page": page, "total_pages": pages})
+        if url.path.startswith("/jobs/") and url.path.endswith("/line_items"):
+            job_id = url.path.split("/")[2]
+            if job_id in Handler.state.get("no_line_items", ()):
+                return self._json(404, {"error": "missing"})
+            return self._json(200, {"object": "list", "data": LINE_ITEMS[job_id]})
         if url.path == "/alpha/job_costing/job_input_materials":
             job_id = query["job_uuid"][0]
             if job_id in Handler.state["rate_limit_once"]:
@@ -216,6 +231,33 @@ class ExportTests(unittest.TestCase):
             [(row["estimate_id"], row["option_id"], row["total_amount"], row["approval_status"]) for row in options],
             [("csr_1", "est_1", "4500.00", "approved"), ("csr_1", "est_2", "0.00", "")],
         )
+
+    def test_line_items_are_written_in_dollars_with_a_status_file(self):
+        with server() as base:
+            self.assertEqual(self.run_export(base), 0)
+        rows = read_csv(self.out / "job_line_items.csv")
+        self.assertEqual(
+            [(r["job_id"], r["invoice_number"], r["line_item_id"], r["quantity"], r["unit_price"], r["amount"], r["taxable"]) for r in rows],
+            [
+                ("job_a", "1001", "li_1", "2", "1500.50", "3001.00", "false"),
+                ("job_a", "1001", "li_2", "1.5", "20.00", "30.00", "true"),
+                ("job_c", rows[2]["invoice_number"], "li_3", "1", "50.00", "50.00", ""),
+            ],
+        )
+        self.assertEqual(
+            read_csv(self.out / "line_items_status.csv"),
+            [{"record_type": "job", "status": "complete", "records": "3", "line_items": "3", "error": ""}],
+        )
+
+    def test_a_job_without_readable_line_items_keeps_its_costs_and_marks_the_file_partial(self):
+        with server() as base:
+            Handler.state["no_line_items"] = {"job_a"}
+            self.assertEqual(self.run_export(base), 0)
+        self.assertEqual([r["job_id"] for r in read_csv(self.out / "job_line_items.csv")], ["job_c"])
+        self.assertEqual([r["job_id"] for r in read_csv(self.out / "materials.csv")], ["job_a", "job_c"])
+        status = read_csv(self.out / "line_items_status.csv")[0]
+        self.assertEqual((status["status"], status["records"]), ("partial", "2"))
+        self.assertIn("404", status["error"])
 
     def test_failed_job_is_left_out_and_fetched_alone_on_rerun(self):
         with server() as base:

@@ -9,7 +9,7 @@ SHVR Data Export is a Chrome extension that downloads your own records from your
 Housecall Pro:
 
 - **Your Housecall Pro API key.** After you sign in, the extension looks in your company's API Key Management for a key whose note mentions SHVR and uses it. If there isn't one, it creates a read-only key with the note "SHVR Data Export", the same way the API Key Management page does. If it can't (for example, you're not an admin), it asks you to paste a key. The key is stored only in your browser's local extension storage; removing the extension deletes it, and you can delete the key in API Key Management at any time.
-- **Your jobs and estimates**, from Housecall Pro's public API (`api.housecallpro.com`), using that API key. These include customer names, contact details, addresses, dates and amounts.
+- **Your jobs, their line items, and your estimates**, from Housecall Pro's public API (`api.housecallpro.com`), using that API key. These include customer names, contact details, addresses, dates and amounts.
 - **Each job's materials and miscellaneous costs**, from Housecall Pro (`pro.housecallpro.com`), using the sign-in you already have in your browser.
 
 ServiceTitan:
