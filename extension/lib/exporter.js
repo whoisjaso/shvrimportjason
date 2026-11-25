@@ -6,18 +6,22 @@
 //   jobs             job rows, in Housecall Pro's order
 //   estimates        estimate rows
 //   estimateOptions  estimate option rows
-//   cost:<id>        { materials, misc } rows for one finished job
+//   cost:<id>        { materials, misc, lineItems } rows for one finished job;
+//                    lineItems is missing when the job's line items couldn't be read
 
 import { AuthError, JOBS_PAGE_SIZE, RequestError } from "./hcp.js";
 import {
   ESTIMATE_COLUMNS,
   ESTIMATE_OPTION_COLUMNS,
   JOB_COLUMNS,
+  LINE_ITEM_COLUMNS,
+  LINE_ITEM_STATUS_COLUMNS,
   MATERIAL_COLUMNS,
   MISC_COLUMNS,
   estimateOptionRows,
   estimateRow,
   jobRow,
+  lineItemRow,
   materialRow,
   miscRow,
   toCsv,
@@ -31,6 +35,9 @@ const COST_PREFIX = "cost:";
 // before the run decides the browser is signed in to another company. One
 // refused job alone can be a deleted or restricted job.
 export const WRONG_COMPANY_PROBE = 3;
+// Line items are extra: a job whose line items can't be read keeps its
+// costs. After this many failures with no success, the run stops asking.
+export const LINE_ITEM_PROBE = 3;
 
 // Settings that outlive an export; everything else in storage is run data.
 const SETTINGS = new Set(["apiKey", "company", "provider", "stTenant", "includeAttachments", "linksOnly"]);
@@ -136,13 +143,28 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
           });
           continue;
         }
+        // What was sold on the job. A failure is counted, not fatal; only a
+        // refused API key (AuthError) stops the run.
+        let lineItems = null;
+        let sold = run.lineItems ?? { records: 0, rows: 0, failed: 0, error: "" };
+        if (!sold.unavailable) {
+          try {
+            lineItems = (await client.lineItems(job.job_id)).map((item) => lineItemRow(job.job_id, job.invoice_number, item));
+            sold = { ...sold, records: sold.records + 1, rows: sold.rows + lineItems.length };
+          } catch (error) {
+            if (!(error instanceof RequestError)) throw error;
+            sold = { ...sold, failed: sold.failed + 1, error: error.message };
+            if (sold.records === 0 && sold.failed >= LINE_ITEM_PROBE) sold.unavailable = true;
+          }
+        }
         done += 1;
         refused = null;
-        run = { ...run, done, notice: null };
+        run = { ...run, done, lineItems: sold, notice: null };
         await writeRun(run, {
           [COST_PREFIX + job.job_id]: {
             materials: materials.map((material) => materialRow(job.job_id, job.invoice_number, material)),
             misc: misc.map((item) => miscRow(job.job_id, job.invoice_number, item)),
+            ...(lineItems ? { lineItems } : {}),
           },
         });
       }
@@ -206,12 +228,24 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
       const { jobs, estimates = [], estimateOptions = [] } = await store.get(["jobs", "estimates", "estimateOptions"]);
       const costs = await store.get(jobs.map((job) => COST_PREFIX + job.job_id));
       const finished = jobs.map((job) => costs[COST_PREFIX + job.job_id]).filter(Boolean);
+      // Complete only when every finished job's line items were read.
+      const sold = run.lineItems ?? { records: 0, rows: 0, failed: 0, error: "" };
+      const withItems = finished.filter((cost) => cost.lineItems);
+      const soldStatus = {
+        record_type: "job",
+        status: withItems.length === finished.length ? "complete" : withItems.length ? "partial" : "unavailable",
+        records: String(withItems.length),
+        line_items: String(withItems.reduce((count, cost) => count + cost.lineItems.length, 0)),
+        error: withItems.length === finished.length ? "" : sold.error || "Some jobs were exported before line items were read.",
+      };
       const stamp = new Date(run.finishedAt ?? now());
       const bytes = makeZip(
         [
           { name: "jobs.csv", data: toCsv(JOB_COLUMNS, jobs) },
           { name: "materials.csv", data: toCsv(MATERIAL_COLUMNS, finished.flatMap((cost) => cost.materials)) },
           { name: "miscellaneous_items.csv", data: toCsv(MISC_COLUMNS, finished.flatMap((cost) => cost.misc)) },
+          { name: "job_line_items.csv", data: toCsv(LINE_ITEM_COLUMNS, withItems.flatMap((cost) => cost.lineItems)) },
+          { name: "line_items_status.csv", data: toCsv(LINE_ITEM_STATUS_COLUMNS, [soldStatus]) },
           { name: "estimates.csv", data: toCsv(ESTIMATE_COLUMNS, estimates) },
           { name: "estimate_options.csv", data: toCsv(ESTIMATE_OPTION_COLUMNS, estimateOptions) },
         ],

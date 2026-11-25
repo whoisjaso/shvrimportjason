@@ -217,6 +217,15 @@ export function createClient({
       return listData(await getPrivate(`/alpha/jobs/${encodeURIComponent(jobId)}/miscellaneous_items`));
     },
 
+    // What was sold on one job, from the public API. The list has come as
+    // { data: [...] }; { line_items: [...] } and a bare array are accepted too.
+    async lineItems(jobId) {
+      const body = await getPublic(`/jobs/${encodeURIComponent(jobId)}/line_items`);
+      const items = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : body?.line_items;
+      if (!Array.isArray(items)) throw new RequestError("A line item list came back without its items.");
+      return items.filter((row) => row && typeof row === "object");
+    },
+
     // The company's enabled public-API keys, as listed on My Apps › API Key
     // Management: [{ id, api_key, note, role, kind, enabled }]. Only admins
     // may read them (others get 401/403).

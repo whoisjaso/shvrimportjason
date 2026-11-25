@@ -18,7 +18,7 @@ import { AuthError, RequestError } from "./hcp.js";
 import { ACTIVE, clearRun, archiveName } from "./exporter.js";
 import { columnsOf, flatten } from "./flatten.js";
 import { ENTITIES, LINE_ITEM_ENTITIES } from "./jobber.js";
-import { toCsv } from "./rows.js";
+import { LINE_ITEM_STATUS_COLUMNS, toCsv } from "./rows.js";
 import { crc32, zipParts } from "./zip.js";
 import { isImage, lastSegment, limiter, prefixed, safeName, uniquePath } from "./files.js";
 
@@ -31,7 +31,7 @@ const pageKey = (entity, page) => `jb:${entity}:${page}`;
 const attKey = (entity, page) => `jbatt:${entity}:${page}`;
 const itemKey = (entity, page) => `jbli:${entity}:${page}`;
 
-export const LINE_ITEM_STATUS_COLUMNS = ["record_type", "status", "records", "line_items", "error"];
+export { LINE_ITEM_STATUS_COLUMNS };
 
 export const ATTACHMENT_COLUMNS = ["record_type", "record_id", "record_number", "file_name", "zip_path", "content_type", "size_bytes", "status", "error", "file_id"];
 

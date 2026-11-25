@@ -111,12 +111,14 @@ It writes these files to `exports/` (`--out` to change):
 | `jobs.csv` | One row per job: `job_id`, invoice number, status, customer, address, schedule and work times, money in dollars, employees, tags, job type |
 | `materials.csv` | One row per job input material, with `job_id` and `invoice_number` |
 | `miscellaneous_items.csv` | One row per miscellaneous item, with `job_id` and `invoice_number` |
+| `job_line_items.csv` | One row per line item sold on a job (name, quantity, unit price, amount), with `job_id` and `invoice_number` |
+| `line_items_status.csv` | Whether `job_line_items.csv` is `complete`, `partial` or `unavailable` |
 | `estimates.csv` | One row per estimate (`estimate_id` is `csr_…`) |
 | `estimate_options.csv` | One row per estimate option; `option_id` (`est_…`) matches a job's `original_estimate_id` |
 | `jobs.json`, `estimates.json` | The raw jobs and estimates from the public API |
-| `costs.jsonl` | The raw private API responses, one job per line |
+| `costs.jsonl` | The raw cost and line item responses, one job per line |
 
-Requests start at least `--delay` seconds apart (default 0.1). Each job takes two requests. A `429` waits for `Retry-After`; a `5xx` or dropped connection retries with exponential backoff. A job whose costs still fail is left out of the cost CSVs and listed at the end.
+Requests start at least `--delay` seconds apart (default 0.1). Each job takes three requests (materials, miscellaneous items, line items). A `429` waits for `Retry-After`; a `5xx` or dropped connection retries with exponential backoff. A job whose costs still fail is left out of the cost CSVs and listed at the end.
 
 `costs.jsonl` doubles as progress. Rerunning into the same directory refetches the job list but only the job costs it doesn't have yet, so an expired cookie or Ctrl-C loses nothing. `--fresh` starts over; `--limit N` exports only the first N jobs for a trial run.
 
@@ -124,7 +126,7 @@ Requests start at least `--delay` seconds apart (default 0.1). Each job takes tw
 
 `extension/` is **SHVR Data Export**, a Chrome extension (Chrome and Edge, Mac and Windows) that downloads a company's records from the field-service software they use today so they can bring them to SHVR. It supports Housecall Pro, ServiceTitan and Jobber, and new platforms plug in as another client and exporter beside those. Users never copy a cookie: the extension uses the browser's own signed-in session. The page uses the SHVR look (shvr.app): its wordmark, palette, square corners, Plus Jakarta Sans and Inter (self-hosted in `extension/fonts/`).
 
-Clicking the toolbar icon opens a three-step page: API key, Housecall Pro sign-in, Export. The export runs in the service worker, so it keeps going while the tab is in the background. It spaces requests 0.1s apart (`DEFAULT_DELAY_MS` in `extension/lib/hcp.js`) and backs off on `429` and `5xx`, like `hcp_export.py`. Progress is kept per job in `chrome.storage.local`, so a closed tab or restarted browser resumes where it stopped. The result is one zip in Downloads holding `jobs.csv`, `materials.csv`, `miscellaneous_items.csv`, `estimates.csv` and `estimate_options.csv`, with the same columns as `hcp_export.py`. The CSVs start with a byte-order mark so Excel shows accents and dashes correctly.
+Clicking the toolbar icon opens a three-step page: API key, Housecall Pro sign-in, Export. The export runs in the service worker, so it keeps going while the tab is in the background. It spaces requests 0.1s apart (`DEFAULT_DELAY_MS` in `extension/lib/hcp.js`) and backs off on `429` and `5xx`, like `hcp_export.py`. Progress is kept per job in `chrome.storage.local`, so a closed tab or restarted browser resumes where it stopped. The result is one zip in Downloads holding `jobs.csv`, `materials.csv`, `miscellaneous_items.csv`, `job_line_items.csv`, `line_items_status.csv`, `estimates.csv` and `estimate_options.csv`, with the same columns as `hcp_export.py`. The CSVs start with a byte-order mark so Excel shows accents and dashes correctly.
 
 The page starts by asking which software the user has. Choosing **ServiceTitan** replaces the first two steps with a single sign-in step. ServiceTitan needs no API key. The extension finds the signed-in account (the "tenant") from ServiceTitan's cookies; if there are several, the user picks one. It then pages through `POST https://<tenant>.eh.go.servicetitan.com/Search/<Entity>` for Job, Estimate, Customer, Invoice, Lead and Payment, with the body `{"filter":{"page":N},"criteriaString":"{}"}`. Every record is kept whole: `extension/lib/flatten.js` turns nested fields into dotted columns, so each search becomes its own CSV with every field ServiceTitan returned. Each page is saved as it arrives, so an interrupted run resumes at the next page. A search stops when a page is empty, when it reaches the reported total, or when a page brings no records it hasn't already seen.
 

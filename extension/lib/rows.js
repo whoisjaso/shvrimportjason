@@ -60,6 +60,28 @@ export const MATERIAL_COLUMNS = [
 
 export const MISC_COLUMNS = ["job_id", "invoice_number", "item_uuid", "name", "description", "quantity", "unit_cost", "total_cost"];
 
+// What was sold on a job (price side), from the public API.
+export const LINE_ITEM_COLUMNS = [
+  "job_id",
+  "invoice_number",
+  "line_item_id",
+  "order_index",
+  "kind",
+  "name",
+  "description",
+  "quantity",
+  "unit_of_measure",
+  "unit_price",
+  "unit_cost",
+  "amount",
+  "taxable",
+  "service_item_id",
+  "service_item_type",
+];
+
+// Whether each line item file is whole: complete, partial or unavailable.
+export const LINE_ITEM_STATUS_COLUMNS = ["record_type", "status", "records", "line_items", "error"];
+
 export function jobRow(job) {
   const customer = isObject(job.customer) ? job.customer : {};
   const employees = (Array.isArray(job.assigned_employees) ? job.assigned_employees : []).filter(isObject);
@@ -238,6 +260,26 @@ export function miscRow(jobId, invoiceNumber, item) {
     quantity: quantity === null ? "" : String(quantity),
     unit_cost: dollars(item.unit_cost),
     total_cost: totalDollars(quantity, item.unit_cost),
+  };
+}
+
+export function lineItemRow(jobId, invoiceNumber, item) {
+  return {
+    job_id: jobId,
+    invoice_number: invoiceNumber,
+    line_item_id: text(item.id),
+    order_index: text(item.order_index),
+    kind: text(item.kind),
+    name: text(item.name),
+    description: text(item.description),
+    quantity: text(item.quantity),
+    unit_of_measure: text(item.unit_of_measure),
+    unit_price: dollars(item.unit_price),
+    unit_cost: dollars(item.unit_cost),
+    amount: dollars(item.amount),
+    taxable: text(item.taxable),
+    service_item_id: text(item.service_item_id),
+    service_item_type: text(item.service_item_type),
   };
 }
 

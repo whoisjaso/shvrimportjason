@@ -1,5 +1,7 @@
 # Handoff: SHVR Data Export → SHVR integration
 
+> Update 2026-11-25 (later): the Housecall Pro export, in both the extension and the CLI, now writes what was sold on each job to `job_line_items.csv`, with `line_items_status.csv` beside it (see the data contract). It adds one public-API request per job. Covered by tests against fakes only; not run live.
+>
 > Update 2026-11-25: Jobber exports now include line items for jobs, quotes and invoices (`*_line_items.csv` plus `line_items_status.csv`; see README.md and "Jobber line items" below), and the wrong-company check needs the first three jobs refused, not one. Neither change has had a live run. The live test account's name and organization id were removed from this file.
 >
 > Update 2026-11-16: the extension is now **SHVR Data Export**, with ServiceTitan support (searches plus optional job attachments, no API key) and Jobber support (GraphQL with the browser's session; jobs, clients, quotes, invoices, requests and their files) beside Housecall Pro, and the SHVR visual theme. README.md's "Chrome extension" section documents the ServiceTitan and Jobber endpoints, how attachments are listed and downloaded, and the two-zip layout (data, then attachments). The Housecall Pro details below are unchanged; zip files are now named `SHVR Export - <company> - <date>.zip`.
@@ -14,7 +16,7 @@ Read this before building the SHVR side. It covers what exists in this repo, wha
 | CLI export | `hcp_export.py` | Done. Writes `jobs.csv`, `materials.csv`, `miscellaneous_items.csv`, `estimates.csv` and `estimate_options.csv`, plus raw JSON, to `exports/`. |
 | Chrome extension | `extension/` | Done and tested end to end. Not yet on the Chrome Web Store. |
 | Web Store submission kit | `store/LISTING.md`, `store/PRIVACY.md`, `store/screenshot-running.png` | Ready apart from the open items below. |
-| Tests | `tests/extension/*.test.mjs`, `test_hcp_export.py`, `test_hcp_session.py` | `npm test` runs all of them: 42 node tests and 24 Python tests, all passing. |
+| Tests | `tests/extension/*.test.mjs`, `test_hcp_export.py`, `test_hcp_session.py` | `npm test` runs all of them: 46 node tests and 26 Python tests, all passing. |
 
 The audience is non-technical Housecall Pro operators. They can paste an API key, but they can't copy a browser cookie. That constraint is why the extension exists: it uses the browser's own Housecall Pro sign-in, so nobody handles the cookie.
 
@@ -35,6 +37,7 @@ The audience is non-technical Housecall Pro operators. They can paste an API key
 | Company name and id | `GET https://api.housecallpro.com/company` | `Authorization: Token <API key>` |
 | Jobs | `GET https://api.housecallpro.com/jobs?page=N&page_size=100` (stop at `total_pages`) | API key |
 | Sign-in check | `GET https://pro.housecallpro.com/alpha/organization/job_line_item_details_settings` | Browser session cookie |
+| Line items (what was sold) | `GET https://api.housecallpro.com/jobs/<job id>/line_items` | API key |
 | Materials | `GET https://pro.housecallpro.com/alpha/job_costing/job_input_materials?job_uuid=<job id>&expand[]=material_vendor&expand[]=material_purchase_status&expand[]=material_source` | Browser session cookie |
 | Miscellaneous items | `GET https://pro.housecallpro.com/alpha/jobs/<job id>/miscellaneous_items` | Browser session cookie |
 
@@ -58,6 +61,10 @@ All money is in dollars with two decimals; HCP sends cents. Every cost row carri
 - **`miscellaneous_items.csv`:** `job_id, invoice_number, item_uuid, name, description, quantity, unit_cost, total_cost`
   - `quantity` comes from `qty_in_hundredths / 100` when that field is present.
   - This account uses these rows for subcontractor labor (for example `Labor - Luis G`).
+- **`job_line_items.csv`:** `job_id, invoice_number, line_item_id, order_index, kind, name, description, quantity, unit_of_measure, unit_price, unit_cost, amount, taxable, service_item_id, service_item_type`
+  - What was sold on the job (the price side); the two files above are the cost side.
+  - The field names are the ones in Housecall Pro's public API reference. `unit_price`, `unit_cost` and `amount` are treated as cents and written in dollars, like every other amount here. That unit is taken from third-party descriptions of the API, not from a live response: check one job against its invoice on the first live run.
+- **`line_items_status.csv`:** `record_type, status, records, line_items, error`, one row for `job`. `complete` means every exported job's line items were read. `partial` means some jobs' weren't (they have no rows; their costs are still exported). `unavailable` means none were: after three failures with no success the run stops asking. Use `job_line_items.csv` as authoritative only when the status is `complete`.
 
 - **`estimates.csv`:** `estimate_id, estimate_number, work_status, customer_id, customer_name, customer_company, customer_email, customer_mobile, street, street_line_2, city, state, zip, scheduled_start, scheduled_end, on_my_way_at, started_at, completed_at, created_at, updated_at, assigned_employees, assigned_employee_ids, lead_source, job_type, business_unit, option_count`
   - `estimate_id` is the estimate itself (`csr_…`).
@@ -74,7 +81,7 @@ The Jobber data zip adds, beside `jobs.csv`, `quotes.csv` and `invoices.csv`:
 - **`job_line_items.csv`, `quote_line_items.csv`, `invoice_line_items.csv`:** `<record>_id, <record>_number, position, line_item_id`, then every plain field Jobber's schema lists for that line item type, under Jobber's own field names. `<record>_id` joins to `id` in the record's CSV. `position` is the item's order on the record, from 1. Amounts are passed through as Jobber sends them.
 - **`line_items_status.csv`:** `record_type, status, records, line_items, error`. `status` is `complete`, `partial` (some pages were read, then Jobber refused) or `unavailable`. An importer should treat a line item file as authoritative only when its status is `complete`; an empty file with `complete` means no record had line items.
 
-The Housecall Pro export still has no price-side line items (only costing materials and miscellaneous items), and ServiceTitan's come only as whatever its searches return.
+ServiceTitan's line items come only as whatever its searches return.
 
 ## Extension architecture
 
@@ -121,6 +128,7 @@ Questions to answer first:
 - [ ] Optional: add a second store screenshot of the "done" state.
 - [ ] Confirm a full live run at 0.1s spacing stays clear of 429s.
 - [ ] Check the wrong-company heuristic with a franchise user signed in to the wrong location.
+- [ ] Run a Housecall Pro export against a real account: confirm `line_items_status.csv` says `complete`, that one job's line items match its invoice (amounts in dollars), and that the third request per job stays clear of 429s.
 - [ ] Run a Jobber export against a real account and confirm the three line item files are `complete` and the listing still fits the cost budget.
 
 ## Run and test
