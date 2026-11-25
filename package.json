@@ -1,0 +1,9 @@
+{
+  "name": "resi-hcp-private-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/extension/*.test.mjs && python3 -m unittest test_hcp_session.py test_hcp_export.py",
+    "package": "sh extension/package.sh"
+  }
+}
