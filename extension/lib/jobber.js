@@ -65,6 +65,8 @@ export const LINE_ITEM_ENTITIES = new Set(["jobs", "quotes", "invoices"]);
 export const LINE_ITEMS_PER_RECORD = 25;
 // Deep enough to unwrap [Type!]! to its named type.
 const TYPE_REF = "kind name ofType { kind name ofType { kind name ofType { kind name } } }";
+// A type the way GraphQL writes it: [QuoteLineItem!]!
+const typeText = (type) => (!type ? "" : type.kind === "NON_NULL" ? `${typeText(type.ofType)}!` : type.kind === "LIST" ? `[${typeText(type.ofType)}]` : (type.name ?? ""));
 const namedType = (type) => {
   let named = type;
   while (named?.ofType) named = named.ofType;
@@ -134,9 +136,13 @@ export function createJobberClient({ fetch, sleep = (ms) => new Promise((r) => s
     return files;
   }
 
+  const types = new Map(); // type name -> its fields, asked once
   async function typeFields(name) {
-    const data = await query(`{ __type(name: ${JSON.stringify(name)}) { fields { name args { name type { kind } } type { ${TYPE_REF} } } } }`, 0, { strict: true });
-    return data.__type?.fields ?? [];
+    if (!types.has(name)) {
+      const data = await query(`{ __type(name: ${JSON.stringify(name)}) { fields { name args { name defaultValue type { ${TYPE_REF} } } type { ${TYPE_REF} } } } }`, 0, { strict: true });
+      types.set(name, data.__type?.fields ?? []);
+    }
+    return types.get(name);
   }
 
   const lineItemsSelection = (fields, after) =>
@@ -172,6 +178,30 @@ export function createJobberClient({ fetch, sleep = (ms) => new Promise((r) => s
         .filter((f) => ["SCALAR", "ENUM"].includes(namedType(f.type).kind) && !(f.args ?? []).some((arg) => arg.type?.kind === "NON_NULL"))
         .map((f) => f.name);
       return fields.length ? fields : null;
+    },
+
+    // What Jobber's schema says about this record type and its line items:
+    // every field of the record type, of its lineItems connection, of the
+    // line item type and of its amounts type, as { type, field, field_type,
+    // arguments } rows. It holds no account data. It is there to show which
+    // other fields or connections could carry lines that lineItems doesn't,
+    // and whether lineItems takes a filter.
+    async schemaRows(entity) {
+      const rows = [];
+      const describe = async (name) => {
+        if (!name || rows.some((row) => row.type === name)) return [];
+        const fields = await typeFields(name);
+        for (const field of fields) {
+          const args = (field.args ?? []).map((arg) => `${arg.name}: ${typeText(arg.type)}${arg.defaultValue == null ? "" : ` = ${arg.defaultValue}`}`);
+          rows.push({ type: name, field: field.name, field_type: typeText(field.type), arguments: args.join(", ") });
+        }
+        return fields;
+      };
+      const record = await describe(typeName(entity));
+      const connection = await describe(namedType(record.find((f) => f.name === "lineItems")?.type).name);
+      await describe(namedType(connection.find((f) => f.name === "nodes")?.type).name);
+      await describe(namedType(record.find((f) => f.name === "amounts")?.type).name);
+      return rows;
     },
 
     // The line items of one page of records: { [record id]: [item] }. `after`

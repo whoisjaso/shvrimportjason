@@ -19,17 +19,20 @@ export const LINE_ITEMS_TEXT = {
 };
 
 // The quote line item fields that say a line isn't part of what was sold.
-// textOnly: a heading or note, not a product or service. optional +
-// selected: an optional line the client didn't pick.
-export const QUOTE_LINE_FIELDS = { textOnly: "textOnly", optional: "optional", selected: "selected" };
+// textOnly: a heading or note, not a product or service. optional without
+// recommended: an optional line that isn't counted in the quote's subtotal.
+// Checked against a real export's quote_line_items.csv (2026-11-25): there,
+// recommended is blank on lines that aren't optional, and true or false on
+// optional ones; with this rule 820 of 853 quotes add up to their subtotal.
+export const QUOTE_LINE_FIELDS = { textOnly: "textOnly", optional: "optional", recommended: "recommended" };
 
 // Is this line left out of the Line items column and the subtotal check?
 // Only quotes leave lines out: text-only lines, and optional lines that
-// say they weren't selected. Lines with a zero quantity or a negative
-// price are kept.
+// aren't recommended. Lines with a zero quantity or a negative price are
+// kept.
 export function leftOut(entityKey, row, fields = QUOTE_LINE_FIELDS) {
   if (entityKey !== "quotes") return false;
-  return row[fields.textOnly] === "true" || (row[fields.optional] === "true" && row[fields.selected] === "false");
+  return row[fields.textOnly] === "true" || (row[fields.optional] === "true" && row[fields.recommended] !== "true");
 }
 
 const inOrder = (rows) => [...rows].sort((a, b) => Number(a.position) - Number(b.position));

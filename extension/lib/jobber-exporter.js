@@ -33,6 +33,7 @@ const attKey = (entity, page) => `jbatt:${entity}:${page}`;
 const itemKey = (entity, page) => `jbli:${entity}:${page}`;
 
 export { LINE_ITEM_STATUS_COLUMNS };
+export const SCHEMA_COLUMNS = ["type", "field", "field_type", "arguments"];
 
 export const ATTACHMENT_COLUMNS = ["record_type", "record_id", "record_number", "file_name", "zip_path", "content_type", "size_bytes", "status", "error", "file_id"];
 
@@ -75,6 +76,12 @@ export function createJobberExporter({ store, files, makeClient, now = () => Dat
         if (!state) {
           const fields = await client.lineItemFields(entity);
           state = fields ? { status: "complete", fields, records: 0, rows: 0 } : { status: "unavailable", error: "Jobber lists no line items for this record type." };
+          // For jobber_schema.csv; the export doesn't depend on it.
+          try {
+            state.schema = await client.schemaRows(entity);
+          } catch (error) {
+            if (!(error instanceof RequestError)) throw error;
+          }
           run = { ...run, lineItems: { ...run.lineItems, [entity.key]: state } };
           if (!fields) return null;
         }
@@ -317,12 +324,14 @@ export function createJobberExporter({ store, files, makeClient, now = () => Dat
       // for a record with nothing sold.
       const status = [];
       const itemFiles = [];
+      const schema = [];
       const checks = [];
       let checked = false;
       for (const entity of ENTITIES) {
         const records = (await pagesOf(entity.key, run)).flat().map(({ files: _files, ...record }) => flatten(record));
         const state = run.lineItems?.[entity.key];
         if (state) status.push({ record_type: entity.single, status: state.status, records: String(state.records ?? 0), line_items: String(state.rows ?? 0), error: state.error ?? "" });
+        schema.push(...(state?.schema ?? []).filter((row) => !schema.some((seen) => seen.type === row.type && seen.field === row.field)));
         if (state?.fields) {
           const keys = Array.from({ length: run.entities[entity.key].pages }, (_, i) => itemKey(entity.key, i + 1));
           const saved = keys.length ? await store.get(keys) : {};
@@ -347,6 +356,8 @@ export function createJobberExporter({ store, files, makeClient, now = () => Dat
       entries.push(...itemFiles);
       // Records whose kept lines don't add up to their subtotal.
       if (checked) entries.push({ name: "line_items_check.csv", data: toCsv(CHECK_COLUMNS, checks) });
+      // What Jobber's schema offers on these record types (no account data).
+      if (schema.length) entries.push({ name: "jobber_schema.csv", data: toCsv(SCHEMA_COLUMNS, schema) });
       if (status.length) entries.push({ name: "line_items_status.csv", data: toCsv(LINE_ITEM_STATUS_COLUMNS, status) });
       if (run.linksOnly) {
         const rows = [];
