@@ -33,7 +33,7 @@ from hcp_session import (
 )
 
 
-ORG_ID = "70e6c270-ae4d-4ffc-ade9-91c71ee721ee"
+ORG_ID = "00000000-0000-4000-8000-000000000001"
 FRANCHISOR = "fran+chis/or==value"
 FRANCHISEE = "franchisee-session-value"
 
@@ -53,7 +53,7 @@ class Handler(BaseHTTPRequestHandler):
         payload = json.dumps(
             {
                 "id": ORG_ID,
-                "name": "T1P Richmond",
+                "name": "Example Painting Co",
                 "time_zone": "America/New_York",
                 "address": {"city": "Richmond", "state": "VA"},
             }
@@ -208,13 +208,13 @@ class CompanyTests(unittest.TestCase):
         info = summarize_company(
             {
                 "id": ORG_ID,
-                "name": "T1P Richmond",
+                "name": "Example Painting Co",
                 "time_zone": "America/New_York",
                 "address": {"city": "Richmond", "state": "VA"},
                 "franchise_info": {"root_franchisor_id": "root-id", "franchisor_depth": 2},
             }
         )
-        self.assertEqual(info.name, "T1P Richmond")
+        self.assertEqual(info.name, "Example Painting Co")
         self.assertEqual(info.organization_id, ORG_ID)
         self.assertEqual(info.id_field, "id")
         self.assertEqual(info.place, "Richmond, VA")
@@ -231,7 +231,7 @@ class CompanyTests(unittest.TestCase):
 
     def test_explicit_id_must_be_one_the_company_returned(self):
         info = CompanyInfo(
-            name="T1P Richmond",
+            name="Example Painting Co",
             organization_id=ORG_ID,
             id_field="id",
             time_zone=None,
@@ -289,7 +289,7 @@ class ExchangeTests(unittest.TestCase):
             info = summarize_company(company)
             result = client.open_franchisee_session(FRANCHISOR, info.organization_id)
 
-        self.assertEqual(info.name, "T1P Richmond")
+        self.assertEqual(info.name, "Example Painting Co")
         self.assertEqual(info.organization_id, ORG_ID)
         self.assertEqual(result.status, 204)
         self.assertEqual(result.cookie.value, FRANCHISEE)
@@ -333,7 +333,7 @@ class ExchangeTests(unittest.TestCase):
         self.assertNotIn("test-api-key", str(company.exception))
 
     def test_run_prints_the_franchisee_cookie_for_the_company(self):
-        company = {"id": ORG_ID, "name": "T1P Richmond"}
+        company = {"id": ORG_ID, "name": "Example Painting Co"}
         exchanged = {}
 
         class FakeClient:
@@ -369,7 +369,7 @@ class ExchangeTests(unittest.TestCase):
         self.assertEqual(exchanged["cookie"], FRANCHISOR)
         self.assertEqual(exchanged["organization_id"], ORG_ID)
         text = stdout.getvalue()
-        self.assertIn("T1P Richmond", text)
+        self.assertIn("Example Painting Co", text)
         self.assertIn(ORG_ID, text)
         self.assertIn(FRANCHISEE, text)
         self.assertIn(f"Cookie: {COOKIE_NAME}={FRANCHISEE}", text)

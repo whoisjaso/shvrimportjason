@@ -70,7 +70,7 @@ function render() {
   $("ready-text").textContent = st
     ? "This reads every job, estimate, customer, invoice, lead and payment. You'll get a zip file with a spreadsheet for each kind of record."
     : jb
-      ? "This reads every job, client, quote, invoice and request. You'll get a zip file with a spreadsheet for each kind of record. Jobber limits how fast its data can be read, so a large account can take half an hour or more."
+      ? "This reads every job, client, quote, invoice and request, and the line items on jobs, quotes and invoices. You'll get a zip file with a spreadsheet for each kind of record. Jobber limits how fast its data can be read, so a large account can take half an hour or more."
       : "This reads every job and estimate, then each job's materials and miscellaneous costs. A large account can take several minutes. You'll get one zip file of spreadsheets: jobs, materials, miscellaneous items, estimates, and estimate options.";
   $("attachments-option").hidden = !SEARCHES[provider];
   $("attachments").checked = state.includeAttachments;

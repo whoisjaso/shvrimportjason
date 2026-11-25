@@ -2,20 +2,22 @@
 // so a stopped worker resumes where it left off:
 //
 //   listing      page through jobs, clients, quotes, invoices and requests;
-//                with attachments, each record's file list comes along
+//                with attachments, each record's file list comes along;
+//                jobs, quotes and invoices also bring their line items
 //   attachments  download every listed file from its presigned S3 link,
 //                one saved page of records at a time, many files at once
 //
 // Storage (chrome.storage.local):
 //   run                  status and counters; run.provider is "jobber"
 //   jb:<entity>:<page>   records from one page (files listed under .files)
+//   jbli:<entity>:<page> line item rows of one page of records
 //   jbatt:<entity>:<page> attachment rows of one finished page
 // Files (IndexedDB, see blobs.js): "jb:<entity>:<page>:<n>" -> Blob
 
 import { AuthError, RequestError } from "./hcp.js";
 import { ACTIVE, clearRun, archiveName } from "./exporter.js";
 import { columnsOf, flatten } from "./flatten.js";
-import { ENTITIES } from "./jobber.js";
+import { ENTITIES, LINE_ITEM_ENTITIES } from "./jobber.js";
 import { toCsv } from "./rows.js";
 import { crc32, zipParts } from "./zip.js";
 import { isImage, lastSegment, limiter, prefixed, safeName, uniquePath } from "./files.js";
@@ -27,6 +29,9 @@ export const DOWNLOAD_CONCURRENCY = 16;
 const PROGRESS_MS = 500;
 const pageKey = (entity, page) => `jb:${entity}:${page}`;
 const attKey = (entity, page) => `jbatt:${entity}:${page}`;
+const itemKey = (entity, page) => `jbli:${entity}:${page}`;
+
+export const LINE_ITEM_STATUS_COLUMNS = ["record_type", "status", "records", "line_items", "error"];
 
 export const ATTACHMENT_COLUMNS = ["record_type", "record_id", "record_number", "file_name", "zip_path", "content_type", "size_bytes", "status", "error", "file_id"];
 
@@ -58,6 +63,41 @@ export function createJobberExporter({ store, files, makeClient, now = () => Dat
 
   async function work() {
     let run = await readRun();
+
+    // The line item rows of one page of records, or null when this record
+    // type's line items can't be read. Line items are extra: a failure here
+    // is recorded (see line_items_status.csv) and the export carries on.
+    async function lineItemRows(entity, after, records) {
+      let state = run.lineItems?.[entity.key];
+      if (!LINE_ITEM_ENTITIES.has(entity.key) || state?.status === "unavailable" || state?.status === "partial") return null;
+      try {
+        if (!state) {
+          const fields = await client.lineItemFields(entity);
+          state = fields ? { status: "complete", fields, records: 0, rows: 0 } : { status: "unavailable", error: "Jobber lists no line items for this record type." };
+          run = { ...run, lineItems: { ...run.lineItems, [entity.key]: state } };
+          if (!fields) return null;
+        }
+        const items = records.length ? await client.lineItems(entity, after, records.map((record) => record.id), state.fields) : {};
+        const rows = records.flatMap((record) =>
+          (items[record.id] ?? []).map(({ id, ...item }, index) => ({
+            [`${entity.single}_id`]: String(record.id ?? ""),
+            [`${entity.single}_number`]: String(record[entity.number] ?? ""),
+            position: String(index + 1),
+            line_item_id: String(id ?? ""),
+            ...flatten(item),
+          })),
+        );
+        run = { ...run, lineItems: { ...run.lineItems, [entity.key]: { ...state, records: state.records + records.length, rows: state.rows + rows.length } } };
+        return rows;
+      } catch (error) {
+        if (!(error instanceof RequestError)) throw error;
+        // Pages already read keep their rows; "partial" says the file is short.
+        const status = state?.records ? "partial" : "unavailable";
+        run = { ...run, lineItems: { ...run.lineItems, [entity.key]: { ...state, status, error: error.message } } };
+        return null;
+      }
+    }
+
     const client = makeClient({
       onWait: ({ reason, seconds }) => {
         run = { ...run, notice: { reason, until: now() + seconds * 1000 } };
@@ -78,13 +118,15 @@ export function createJobberExporter({ store, files, makeClient, now = () => Dat
           while (!progress.done && progress.pages < MAX_PAGES) {
             if (cancelRequested) return await canceled();
             run = await writeRun({ ...run, current: entity.key, notice: null });
-            const { records, total, endCursor, hasNextPage } = await client.listPage(entity, progress.cursor, run.includeAttachments);
+            const after = progress.cursor;
+            const { records, total, endCursor, hasNextPage } = await client.listPage(entity, after, run.includeAttachments);
             const page = progress.pages + 1;
+            const itemRows = await lineItemRows(entity, after, records);
             Object.assign(progress, { pages: records.length ? page : progress.pages, count: progress.count + records.length, total, cursor: endCursor, done: !hasNextPage || !records.length });
             const withFiles = records.some((record) => record.files?.length);
             const attachmentPages = withFiles ? { ...run.attachmentPages, [entity.key]: [...(run.attachmentPages?.[entity.key] ?? []), page] } : run.attachmentPages;
             run = { ...run, entities: { ...run.entities, [entity.key]: { ...progress } }, attachmentPages };
-            await writeRun(run, records.length ? { [pageKey(entity.key, page)]: records } : {});
+            await writeRun(run, records.length ? { [pageKey(entity.key, page)]: records, ...(itemRows ? { [itemKey(entity.key, page)]: itemRows } : {}) } : {});
           }
         }
         if (run.includeAttachments) {
@@ -273,6 +315,23 @@ export function createJobberExporter({ store, files, makeClient, now = () => Dat
         const rows = (await pagesOf(entity.key, run)).flat().map(({ files: _files, ...record }) => flatten(record));
         entries.push({ name: `${entity.key}.csv`, data: toCsv(columnsOf(rows), rows) });
       }
+      // Line items: one CSV per record type that has them, and a status file
+      // saying whether each is complete, so a short file is never mistaken
+      // for a record with nothing sold.
+      const status = [];
+      for (const entity of ENTITIES) {
+        const state = run.lineItems?.[entity.key];
+        if (!state) continue;
+        status.push({ record_type: entity.single, status: state.status, records: String(state.records ?? 0), line_items: String(state.rows ?? 0), error: state.error ?? "" });
+        if (!state.fields) continue;
+        const keys = Array.from({ length: run.entities[entity.key].pages }, (_, i) => itemKey(entity.key, i + 1));
+        const saved = keys.length ? await store.get(keys) : {};
+        const rows = keys.flatMap((key) => saved[key] ?? []);
+        const lead = [`${entity.single}_id`, `${entity.single}_number`, "position", "line_item_id"];
+        const columns = [...lead, ...columnsOf([Object.fromEntries(state.fields.filter((name) => name !== "id").map((name) => [name, ""])), ...rows]).filter((c) => !lead.includes(c))];
+        entries.push({ name: `${entity.single}_line_items.csv`, data: toCsv(columns, rows) });
+      }
+      if (status.length) entries.push({ name: "line_items_status.csv", data: toCsv(LINE_ITEM_STATUS_COLUMNS, status) });
       if (run.linksOnly) {
         const rows = [];
         for (const entity of ENTITIES) {

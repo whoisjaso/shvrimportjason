@@ -1,5 +1,7 @@
 # Handoff: SHVR Data Export → SHVR integration
 
+> Update 2026-11-25: Jobber exports now include line items for jobs, quotes and invoices (`*_line_items.csv` plus `line_items_status.csv`; see README.md and "Jobber line items" below), and the wrong-company check needs the first three jobs refused, not one. Neither change has had a live run. The live test account's name and organization id were removed from this file.
+>
 > Update 2026-11-16: the extension is now **SHVR Data Export**, with ServiceTitan support (searches plus optional job attachments, no API key) and Jobber support (GraphQL with the browser's session; jobs, clients, quotes, invoices, requests and their files) beside Housecall Pro, and the SHVR visual theme. README.md's "Chrome extension" section documents the ServiceTitan and Jobber endpoints, how attachments are listed and downloaded, and the two-zip layout (data, then attachments). The Housecall Pro details below are unchanged; zip files are now named `SHVR Export - <company> - <date>.zip`.
 
 Read this before building the SHVR side. It covers what exists in this repo, what has been proven against a live Housecall Pro account, the data contract, and the seams an integration should use.
@@ -12,16 +14,16 @@ Read this before building the SHVR side. It covers what exists in this repo, wha
 | CLI export | `hcp_export.py` | Done. Writes `jobs.csv`, `materials.csv`, `miscellaneous_items.csv`, `estimates.csv` and `estimate_options.csv`, plus raw JSON, to `exports/`. |
 | Chrome extension | `extension/` | Done and tested end to end. Not yet on the Chrome Web Store. |
 | Web Store submission kit | `store/LISTING.md`, `store/PRIVACY.md`, `store/screenshot-running.png` | Ready apart from the open items below. |
-| Tests | `tests/extension/*.test.mjs`, `test_hcp_export.py`, `test_hcp_session.py` | `npm test` runs all of them: 12 node tests and 24 Python tests, all passing. |
+| Tests | `tests/extension/*.test.mjs`, `test_hcp_export.py`, `test_hcp_session.py` | `npm test` runs all of them: 42 node tests and 24 Python tests, all passing. |
 
 The audience is non-technical Housecall Pro operators. They can paste an API key, but they can't copy a browser cookie. That constraint is why the extension exists: it uses the browser's own Housecall Pro sign-in, so nobody handles the cookie.
 
-## Verified against a live account (That 1 Painter Richmond, org `70e6c270-ae4d-4ffc-ade9-91c71ee721ee`, 2026-11-12)
+## Verified against a live account (one Housecall Pro company, 2026-11-12)
 
 - **CLI:** 609 jobs, 1,339 materials and 436 miscellaneous items. There were no failures and no 429s at 0.5s spacing.
 - **Extension:** loaded unpacked in Chrome for Testing. The zip held exactly the same row counts as the CLI.
 - **First-run states:** a bad key shows an error, a real key shows the company name, no HCP session shows the "Sign in" prompt, and signing in enables Export.
-- **Download name:** the zip saved as `HCP Job Costing Export - That 1 Painter Richmond - 2026-11-12.zip`.
+- **Download name:** the zip was named after the company and the date (the name is now `SHVR Export - <company> - <date>.zip`).
 - **Worker restart:** I killed the service worker mid-export. The open page restarted it within 5s, and it continued from the next unfinished job.
 - **Request spacing:** lowered from 0.5s to 0.1s at the user's request, in both `extension/lib/hcp.js` (`DEFAULT_DELAY_MS`) and `hcp_export.py` (`DEFAULT_DELAY`). At 0.1s, the public API listing (7 pages of jobs, 19 of estimates) has run live with no 429s. The private per-job cost calls haven't had a full run at 0.1s yet; that run reused saved costs. The user is testing that themselves.
 - **Estimates (added after the handoff was first written):** a live CLI run at 0.1s spacing listed 1,860 estimates and 2,830 estimate options with no 429s. All 487 jobs with an `original_estimate_id` matched an `option_id` in `estimate_options.csv`. The extension writes the same two files into its zip; that path is covered by unit tests but hasn't had a live browser run yet.
@@ -40,7 +42,7 @@ The audience is non-technical Housecall Pro operators. They can paste an API key
 - **Signed out:** the browser's fetch gets an `opaqueredirect` or a 401. A 200 with a non-JSON body also counts as signed out.
 - **API key access:** keys require HCP's MAX plan, and only an admin can create one (My Apps › All Apps › API Key Management). A read-only key is enough.
 - **Retries:** a 429 waits for `Retry-After` (default 5s, up to 6 retries). A 5xx or network error backs off 2, 4, 8 and 16s. A 401 stops the run.
-- **Wrong company:** the browser can be signed in to a different HCP company than the API key's, which matters for franchise multi-location users. The extension infers that only when the very first job's costs come back 403 or 404, and then shows a "switch company" error. This heuristic hasn't been checked live.
+- **Wrong company:** the browser can be signed in to a different HCP company than the API key's, which matters for franchise multi-location users. The extension infers that when the first three jobs' costs (`WRONG_COMPANY_PROBE` in `extension/lib/exporter.js`; all of them when there are fewer) each come back 403 or 404 before any job has succeeded, and then shows a "switch company" error. A single refused job at the start is recorded as a failed job instead. This heuristic hasn't been checked live.
 - **Private API contract:** the shapes are documented in `~/Code/_kickback/costr/docs/HCP_API.md`, the Kickback costr repo. That repo's `app/clients/hcp_private_api_client.rb` covers the same endpoints, plus the write calls.
 
 ## Data contract (the export CSVs)
@@ -64,6 +66,15 @@ All money is in dollars with two decimals; HCP sends cents. Every cost row carri
   - Both files come straight from `GET /estimates` (options are embedded in each estimate), so they add only one request per 100 estimates and no private API calls.
 
 `extension/lib/rows.js` and the row functions in `hcp_export.py` define the columns; keep the two in step.
+
+### Jobber line items
+
+The Jobber data zip adds, beside `jobs.csv`, `quotes.csv` and `invoices.csv`:
+
+- **`job_line_items.csv`, `quote_line_items.csv`, `invoice_line_items.csv`:** `<record>_id, <record>_number, position, line_item_id`, then every plain field Jobber's schema lists for that line item type, under Jobber's own field names. `<record>_id` joins to `id` in the record's CSV. `position` is the item's order on the record, from 1. Amounts are passed through as Jobber sends them.
+- **`line_items_status.csv`:** `record_type, status, records, line_items, error`. `status` is `complete`, `partial` (some pages were read, then Jobber refused) or `unavailable`. An importer should treat a line item file as authoritative only when its status is `complete`; an empty file with `complete` means no record had line items.
+
+The Housecall Pro export still has no price-side line items (only costing materials and miscellaneous items), and ServiceTitan's come only as whatever its searches return.
 
 ## Extension architecture
 
@@ -105,17 +116,18 @@ Questions to answer first:
 
 ## Open items
 
-- [ ] Submit to the Chrome Web Store as unlisted. This needs a $5 developer account. Upload the zip from `npm run package`, and paste the text from `store/LISTING.md`.
+- [ ] Submit to the Chrome Web Store as unlisted. This needs a Chrome Web Store developer account. Upload the zip from `npm run package`, and paste the text from `store/LISTING.md`.
 - [ ] Put a real contact email in `store/PRIVACY.md` (it has a placeholder), host it publicly (a Gist or GitHub Pages), and paste its URL into the listing.
 - [ ] Optional: add a second store screenshot of the "done" state.
 - [ ] Confirm a full live run at 0.1s spacing stays clear of 429s.
 - [ ] Check the wrong-company heuristic with a franchise user signed in to the wrong location.
+- [ ] Run a Jobber export against a real account and confirm the three line item files are `complete` and the listing still fits the cost budget.
 
 ## Run and test
 
 ```bash
 npm test                      # node extension tests + python tests
-npm run package               # dist/hcp-job-costing-export-<version>.zip
+npm run package               # dist/shvr-data-export-<version>.zip
 python3 hcp_export.py --api-key-file ~/.config/hcp-private-api/api.key \
   --session-cookie-file ~/.config/hcp-private-api/session.cookie   # CLI export
 ```
