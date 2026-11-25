@@ -39,7 +39,7 @@ test("signed out comes back as UNAUTHENTICATED errors on an HTTP 200", async () 
 test("a page waits for the cost budget to refill before asking", async () => {
   const slept = [];
   const { fetch, queries } = graphqlFetch(
-    (query) => (query.includes("account") ? { data: { account: { id: "A", name: "Pink's" } } } : { data: { jobs: { totalCount: 0, pageInfo: { hasNextPage: false }, nodes: [] } } }),
+    (query) => (query.includes("account") ? { data: { account: { id: "A", name: "Example" } } } : { data: { jobs: { totalCount: 0, pageInfo: { hasNextPage: false }, nodes: [] } } }),
     { budget: 8000 },
   );
   const client = createJobberClient({ fetch, delayMs: 0, sleep: async (ms) => slept.push(ms) });
@@ -71,12 +71,18 @@ test("a record's files past the first hundred are paged by id", async () => {
 });
 
 // Pages per entity key; each page: records (with files when listed).
-function fakeClient(pages, files = {}) {
+// lineItems: { fields, items: { [record id]: [item] }, fail: { [entity key]: page index } }
+function fakeClient(pages, files = {}, lineItems = {}) {
   const requested = [];
   return {
     requested,
     client: {
-      account: async () => ({ id: "A", name: "Pink's Windows Austin" }),
+      lineItemFields: async (entity) => (entity.key === "requests" ? null : (lineItems.fields ?? ["id", "name"])),
+      lineItems: async (entity, after, ids) => {
+        if (lineItems.fail?.[entity.key] === (after ? Number(after) : 0)) throw new RequestError("Jobber answered with an error: no line items for you");
+        return Object.fromEntries(ids.map((id) => [id, lineItems.items?.[id] ?? []]));
+      },
+      account: async () => ({ id: "A", name: "Example Windows Co" }),
       listPage: async (entity, after, withFiles) => {
         const index = after ? Number(after) : 0;
         requested.push(`${entity.key}:${index}`);
@@ -128,17 +134,17 @@ test("exports every search page by page, and the files in a second zip", async (
 
   const run = store.data.run;
   assert.equal(run.status, "done");
-  assert.equal(run.company, "Pink's Windows Austin");
+  assert.equal(run.company, "Example Windows Co");
   assert.deepEqual(fake.requested.filter((r) => r.startsWith("jobs:")), ["jobs:0", "jobs:1"]);
   assert.deepEqual(run.attachments, { total: 3, done: 3, listed: 4, files: 3, failed: 1, bytes: 11 });
 
   const { bytes: data, fileName } = await zipBytes(exporter.archive());
-  assert.equal(fileName, "SHVR Export - Pink's Windows Austin - 2026-11-16.zip");
+  assert.equal(fileName, "SHVR Export - Example Windows Co - 2026-11-16.zip");
   assert.deepEqual(unzip(data, "jobs.csv").split("\r\n").slice(0, 2), ["\uFEFFid,jobNumber,title,client.id,client.name", "J1,101,Windows,C1,Ada"]);
   assert.equal(unzip(data, "clients.csv"), "\uFEFFid,name,tags.nodes\r\nC1,Ada,\"[{\"\"label\"\":\"\"vip\"\"}]\"\r\n");
 
   const { bytes, fileName: attName } = await zipBytes(exporter.attachmentsArchive());
-  assert.equal(attName, "SHVR Attachments - Pink's Windows Austin - 2026-11-16.zip");
+  assert.equal(attName, "SHVR Attachments - Example Windows Co - 2026-11-16.zip");
   assert.equal(unzip(bytes, "job 101/front.jpg"), "ONE");
   assert.equal(unzip(bytes, "job 103/front.jpg"), "THREE");
   assert.equal(unzip(bytes, "invoice 9/receipt.pdf"), "PDF");
@@ -197,4 +203,98 @@ test("an export stopped mid-listing resumes at the next page", async () => {
   assert.equal(healthy.requested[0], "jobs:1");
   assert.equal(store.data.run.status, "done");
   assert.equal(store.data.run.entities.jobs.count, 3);
+});
+
+test("line item fields come from Jobber's schema: plain fields only", async () => {
+  const scalar = (name) => ({ name, args: [], type: { kind: "SCALAR", name: "String" } });
+  const types = {
+    Job: [scalar("id"), { name: "lineItems", args: [{ name: "first", type: { kind: "SCALAR" } }], type: { kind: "NON_NULL", ofType: { kind: "OBJECT", name: "JobLineItemConnection" } } }],
+    JobLineItemConnection: [{ name: "nodes", args: [], type: { kind: "NON_NULL", ofType: { kind: "LIST", ofType: { kind: "NON_NULL", ofType: { kind: "OBJECT", name: "JobLineItem" } } } } }],
+    JobLineItem: [
+      scalar("id"),
+      scalar("name"),
+      { name: "quantity", args: [], type: { kind: "NON_NULL", ofType: { kind: "SCALAR", name: "Float" } } },
+      { name: "category", args: [], type: { kind: "ENUM", name: "Category" } },
+      { name: "linkedProductOrService", args: [], type: { kind: "OBJECT", name: "ProductOrService" } },
+      { name: "priceIn", args: [{ name: "currency", type: { kind: "NON_NULL" } }], type: { kind: "SCALAR", name: "Float" } },
+    ],
+    Request: [scalar("id")],
+  };
+  const { fetch } = graphqlFetch((query) => ({ data: { __type: { fields: types[/__type\(name: "(\w+)"\)/.exec(query)[1]] } } }));
+  const client = createJobberClient({ fetch, delayMs: 0 });
+  assert.deepEqual(await client.lineItemFields(ENTITIES[0]), ["id", "name", "quantity", "category"]);
+  assert.equal(await client.lineItemFields(ENTITIES[4]), null);
+});
+
+test("a page's line items come in one query; longer lists and missing records are read by id", async () => {
+  const item = (n) => ({ id: `L${n}`, name: `item ${n}` });
+  const { fetch, queries } = graphqlFetch((query) => {
+    if (query.startsWith('{ job(id: "J1")')) return { data: { job: { lineItems: { pageInfo: { hasNextPage: false }, nodes: [item(2)] } } } };
+    if (query.startsWith('{ job(id: "J3")')) return { data: { job: { lineItems: { pageInfo: { hasNextPage: false }, nodes: [item(4)] } } } };
+    return {
+      data: {
+        jobs: {
+          nodes: [
+            { id: "J1", lineItems: { pageInfo: { hasNextPage: true, endCursor: "c25" }, nodes: [item(1)] } },
+            { id: "J2", lineItems: { pageInfo: { hasNextPage: false }, nodes: [item(3)] } },
+          ],
+        },
+      },
+    };
+  });
+  const items = await createJobberClient({ fetch, delayMs: 0 }).lineItems(ENTITIES[0], "p1", ["J1", "J2", "J3"], ["id", "name"]);
+  assert.deepEqual(Object.fromEntries(Object.entries(items).map(([id, list]) => [id, list.map((i) => i.id)])), { J1: ["L1", "L2"], J2: ["L3"], J3: ["L4"] });
+  assert.match(queries[0], /^\{ jobs\(first: 50, after: "p1"\) \{ nodes \{ id lineItems\(first: 25\) \{ pageInfo \{ hasNextPage endCursor \} nodes \{ id name \} \} \} \} \}$/);
+  assert.match(queries[1], /job\(id: "J1"\) \{ lineItems\(first: 25, after: "c25"\)/);
+});
+
+test("a line item query Jobber rejects fails even when data came back", async () => {
+  const { fetch } = graphqlFetch(() => ({ data: { jobs: null }, errors: [{ message: "Field 'nope' doesn't exist" }] }));
+  await assert.rejects(createJobberClient({ fetch, delayMs: 0 }).lineItems(ENTITIES[0], null, ["J1"], ["id", "nope"]), RequestError);
+});
+
+test("line items go into one CSV per record type, with a status file", async () => {
+  const store = memoryStore();
+  const lineItems = {
+    fields: ["id", "name", "quantity", "unitPrice"],
+    items: { J1: [{ id: "L1", name: "Clean windows", quantity: 2, unitPrice: 1.5 }, { id: "L2", name: "Screens", quantity: 1, unitPrice: null }], J3: [{ id: "L3", name: "Gutters", quantity: 1, unitPrice: 3 }] },
+  };
+  const exporter = exporterFor(store, fakeClient(PAGES, FILES, lineItems));
+  await exporter.start({ includeAttachments: false });
+
+  assert.equal(store.data.run.status, "done");
+  const { bytes } = await zipBytes(exporter.archive());
+  assert.deepEqual(unzip(bytes, "job_line_items.csv").replace("\uFEFF", "").trim().split("\r\n"), [
+    "job_id,job_number,position,line_item_id,name,quantity,unitPrice",
+    "J1,101,1,L1,Clean windows,2,1.5",
+    "J1,101,2,L2,Screens,1,",
+    "J3,103,1,L3,Gutters,1,3",
+  ]);
+  // No invoice has line items: the file still carries its header.
+  assert.equal(unzip(bytes, "invoice_line_items.csv").replace("\uFEFF", "").trim(), "invoice_id,invoice_number,position,line_item_id,name,quantity,unitPrice");
+  assert.deepEqual(unzip(bytes, "line_items_status.csv").replace("\uFEFF", "").trim().split("\r\n"), [
+    "record_type,status,records,line_items,error",
+    "job,complete,3,3,",
+    "quote,complete,0,0,",
+    "invoice,complete,1,0,",
+  ]);
+  assert.throws(() => unzip(bytes, "client_line_items.csv"));
+});
+
+test("line items that can't be read are reported, and the export still finishes", async () => {
+  const store = memoryStore();
+  const lineItems = { items: { J1: [{ id: "L1", name: "Clean windows" }] }, fail: { jobs: 1, invoices: 0 } };
+  const exporter = exporterFor(store, fakeClient(PAGES, FILES, lineItems));
+  await exporter.start({ includeAttachments: false });
+
+  assert.equal(store.data.run.status, "done");
+  assert.equal(store.data.run.entities.jobs.count, 3);
+  const { bytes } = await zipBytes(exporter.archive());
+  assert.deepEqual(unzip(bytes, "line_items_status.csv").replace("\uFEFF", "").trim().split("\r\n"), [
+    "record_type,status,records,line_items,error",
+    "job,partial,2,1,Jobber answered with an error: no line items for you",
+    "quote,complete,0,0,",
+    "invoice,unavailable,0,0,Jobber answered with an error: no line items for you",
+  ]);
+  assert.equal(unzip(bytes, "job_line_items.csv").replace("\uFEFF", "").trim().split("\r\n").length, 2);
 });

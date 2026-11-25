@@ -27,6 +27,10 @@ import { makeZip } from "./zip.js";
 // Statuses of a run that's still going, for either provider.
 export const ACTIVE = new Set(["listing", "costs", "attachments"]);
 const COST_PREFIX = "cost:";
+// How many jobs in a row, from the very first, must be refused (403 or 404)
+// before the run decides the browser is signed in to another company. One
+// refused job alone can be a deleted or restricted job.
+export const WRONG_COMPANY_PROBE = 3;
 
 // Settings that outlive an export; everything else in storage is run data.
 const SETTINGS = new Set(["apiKey", "company", "provider", "stTenant", "includeAttachments", "linksOnly"]);
@@ -101,6 +105,8 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
       const pending = jobs.filter((job) => !finished[COST_PREFIX + job.job_id]);
       let done = jobs.length - pending.length;
       run = await writeRun({ ...run, done, pace: { at: now(), done } });
+      // Counts refusals while nothing has ever succeeded; null once one has.
+      let refused = done === 0 && run.failed.length === 0 ? 0 : null;
 
       for (const job of pending) {
         if (cancelRequested) return await writeRun({ ...run, status: "canceled", notice: null });
@@ -111,9 +117,11 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
           misc = await client.miscellaneousItems(job.job_id);
         } catch (error) {
           if (!(error instanceof RequestError)) throw error;
-          // The first job of the company refused outright: the browser is
-          // signed in to a different Housecall Pro company than the key.
-          if (done === 0 && run.failed.length === 0 && [403, 404].includes(error.status)) {
+          // Every job so far refused outright: the browser is signed in to
+          // a different Housecall Pro company than the key.
+          if (refused !== null && [403, 404].includes(error.status)) refused += 1;
+          else refused = null;
+          if (refused !== null && refused >= Math.min(WRONG_COMPANY_PROBE, pending.length)) {
             return await writeRun({
               ...run,
               status: "error",
@@ -129,6 +137,7 @@ export function createExporter({ store, makeClient, now = () => Date.now(), onFi
           continue;
         }
         done += 1;
+        refused = null;
         run = { ...run, done, notice: null };
         await writeRun(run, {
           [COST_PREFIX + job.job_id]: {

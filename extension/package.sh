@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the zip to upload to the Chrome Web Store: dist/hcp-job-costing-export-<version>.zip
+# Build the zip to upload to the Chrome Web Store: dist/shvr-data-export-<version>.zip
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)

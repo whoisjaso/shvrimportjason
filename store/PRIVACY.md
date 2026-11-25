@@ -20,7 +20,7 @@ ServiceTitan:
 
 Jobber:
 
-- **Your jobs, clients, quotes, invoices and requests**, from Jobber's API (`api.getjobber.com`), using the sign-in you already have in your browser. These include client names, contact details, addresses, dates and amounts.
+- **Your jobs, clients, quotes, invoices and requests, and the line items on jobs, quotes and invoices**, from Jobber's API (`api.getjobber.com`), using the sign-in you already have in your browser. These include client names, contact details, addresses, dates and amounts.
 - **The files and photos attached to them**, downloaded from the links Jobber gives for each file (`jobber.s3.amazonaws.com` and `jobber-production-general-uploads.s3.amazonaws.com`). While an export runs they are kept in your browser's local extension storage until the zip is saved.
 
 In every case the extension never reads, copies or stores your password or sign-in cookie values; your browser attaches your sign-in to those requests the same way it does when you use the website.

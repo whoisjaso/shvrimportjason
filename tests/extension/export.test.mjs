@@ -145,7 +145,7 @@ function fakeClient({
   return {
     fetched,
     client: {
-      company: async () => ({ id: "org_1", name: "T1P Richmond" }),
+      company: async () => ({ id: "org_1", name: "Example Painting Co" }),
       checkSession: async () => {
         if (!session) throw new AuthError("session", "signed out");
       },
@@ -181,11 +181,11 @@ test("a full export lists every page of jobs and estimates, links costs to jobs,
   assert.equal(finishedRun.status, "done");
   assert.equal(finishedRun.total, 3);
   assert.equal(finishedRun.done, 3);
-  assert.equal(finishedRun.company, "T1P Richmond");
+  assert.equal(finishedRun.company, "Example Painting Co");
   assert.equal(finishedRun.estimates, 2);
 
   const { bytes, fileName } = await exporter.archive();
-  assert.equal(fileName, "SHVR Export - T1P Richmond - 2026-11-12.zip");
+  assert.equal(fileName, "SHVR Export - Example Painting Co - 2026-11-12.zip");
   const jobs = unzip(bytes, "jobs.csv").split("\r\n");
   assert.match(jobs[1], /^job_a,1001,,,,Ada Lovelace,/);
   assert.equal(jobs.length, 5); // header, 3 jobs, trailing newline
@@ -229,11 +229,20 @@ test("a job that keeps failing is skipped, reported, and retried alone", async (
   assert.deepEqual(store.data.run.failed, []);
 });
 
-test("the first job refused outright means the browser is in another company", async () => {
+test("every job refused from the start means the browser is in another company", async () => {
   const store = memoryStore({ apiKey: "k" });
-  await exporterFor(store, fakeClient({ costFailures: { job_a: new RequestError("HTTP 404", 404) } })).start();
+  const refusal = () => new RequestError("HTTP 404", 404);
+  await exporterFor(store, fakeClient({ costFailures: { job_a: refusal(), job_b: refusal(), job_c: refusal() } })).start();
   assert.equal(store.data.run.status, "error");
   assert.equal(store.data.run.error.kind, "wrong_company");
+});
+
+test("one refused job at the start is skipped, not taken for another company", async () => {
+  const store = memoryStore({ apiKey: "k" });
+  await exporterFor(store, fakeClient({ costFailures: { job_a: new RequestError("HTTP 404", 404) } })).start();
+  assert.equal(store.data.run.status, "done");
+  assert.equal(store.data.run.done, 2);
+  assert.deepEqual(store.data.run.failed.map((job) => job.job_id), ["job_a"]);
 });
 
 test("signed-out browser stops before any job is read", async () => {

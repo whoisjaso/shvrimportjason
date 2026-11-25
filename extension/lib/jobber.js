@@ -59,6 +59,19 @@ export const ENTITIES = [
   },
 ];
 
+// Records that carry line items (the products and services sold), and how
+// many come along per record before the rest are paged by id.
+export const LINE_ITEM_ENTITIES = new Set(["jobs", "quotes", "invoices"]);
+export const LINE_ITEMS_PER_RECORD = 25;
+// Deep enough to unwrap [Type!]! to its named type.
+const TYPE_REF = "kind name ofType { kind name ofType { kind name ofType { kind name } } }";
+const namedType = (type) => {
+  let named = type;
+  while (named?.ofType) named = named.ofType;
+  return named ?? {};
+};
+const typeName = (entity) => entity.single[0].toUpperCase() + entity.single.slice(1);
+
 const FILE_FIELDS = "id fileName fileSize contentType createdAt description downloadUrl";
 const filesSelection = (after) =>
   `noteAttachments(first: ${FILES_PER_RECORD}${after ? `, after: ${JSON.stringify(after)}` : ""}) { totalCount pageInfo { hasNextPage endCursor } nodes { ${FILE_FIELDS} } }`;
@@ -70,7 +83,8 @@ export function createJobberClient({ fetch, sleep = (ms) => new Promise((r) => s
   const signedOut = () => new AuthError("session", "You're not signed in to Jobber in this browser.");
   let budget = null; // { available, restoreRate } from the last response
 
-  async function query(text, requestedCost = 0) {
+  // strict: any GraphQL error fails the query, even when data came back.
+  async function query(text, requestedCost = 0, { strict = false } = {}) {
     for (let throttled = 0; ; throttled += 1) {
       // Wait for the budget to cover this query instead of being refused.
       if (budget && requestedCost > budget.available) {
@@ -101,7 +115,7 @@ export function createJobberClient({ fetch, sleep = (ms) => new Promise((r) => s
         await sleep(seconds * 1000);
         continue;
       }
-      if (!body?.data) throw new RequestError(`Jobber answered with an error: ${body?.errors?.[0]?.message ?? "no data"}`);
+      if (!body?.data || (strict && body.errors?.length)) throw new RequestError(`Jobber answered with an error: ${body?.errors?.[0]?.message ?? "no data"}`);
       return body.data;
     }
   }
@@ -120,7 +134,68 @@ export function createJobberClient({ fetch, sleep = (ms) => new Promise((r) => s
     return files;
   }
 
+  async function typeFields(name) {
+    const data = await query(`{ __type(name: ${JSON.stringify(name)}) { fields { name args { name type { kind } } type { ${TYPE_REF} } } } }`, 0, { strict: true });
+    return data.__type?.fields ?? [];
+  }
+
+  const lineItemsSelection = (fields, after) =>
+    `lineItems(first: ${LINE_ITEMS_PER_RECORD}${after ? `, after: ${JSON.stringify(after)}` : ""}) { pageInfo { hasNextPage endCursor } nodes { ${fields.join(" ")} } }`;
+  // About one point per field per line item, plus the connection itself.
+  const lineItemsCost = (records, fields) => records * (LINE_ITEMS_PER_RECORD * (fields.length + 1) + 4);
+
+  // One record's line items from `after` on (all of them when it's null).
+  async function lineItemsOf(entity, id, fields, after = null) {
+    const items = [];
+    for (let cursor = after, first = true; first || cursor; first = false) {
+      const data = await query(`{ ${entity.single}(id: ${JSON.stringify(id)}) { ${lineItemsSelection(fields, cursor)} } }`, lineItemsCost(1, fields), { strict: true });
+      const connection = data[entity.single]?.lineItems;
+      if (!connection || !Array.isArray(connection.nodes)) break;
+      items.push(...connection.nodes.filter(Boolean));
+      cursor = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
+    }
+    return items;
+  }
+
   return {
+    // The plain (scalar and enum) fields of this record type's line items,
+    // read from Jobber's own schema so no field name is guessed; null when
+    // the record type has no lineItems connection.
+    async lineItemFields(entity) {
+      const field = (await typeFields(typeName(entity))).find((f) => f.name === "lineItems");
+      const connection = namedType(field?.type).name;
+      if (!connection) return null;
+      const nodes = (await typeFields(connection)).find((f) => f.name === "nodes");
+      const item = namedType(nodes?.type).name;
+      if (!item) return null;
+      const fields = (await typeFields(item))
+        .filter((f) => ["SCALAR", "ENUM"].includes(namedType(f.type).kind) && !(f.args ?? []).some((arg) => arg.type?.kind === "NON_NULL"))
+        .map((f) => f.name);
+      return fields.length ? fields : null;
+    },
+
+    // The line items of one page of records: { [record id]: [item] }. `after`
+    // is the cursor that page was listed from. A record that isn't on the
+    // page any more, or has more items than came along, is read by id.
+    async lineItems(entity, after, ids, fields) {
+      const args = `first: ${PAGE_SIZE}${after ? `, after: ${JSON.stringify(after)}` : ""}`;
+      const data = await query(`{ ${entity.key}(${args}) { nodes { id ${lineItemsSelection(fields)} } } }`, lineItemsCost(PAGE_SIZE, fields), { strict: true });
+      const nodes = data[entity.key]?.nodes;
+      if (!Array.isArray(nodes)) throw new RequestError(`The ${entity.label} line items came back without their records.`);
+      const byId = new Map(nodes.filter(Boolean).map((node) => [node.id, node.lineItems]));
+      const out = {};
+      for (const id of ids) {
+        const connection = byId.get(id);
+        if (!connection || !Array.isArray(connection.nodes)) {
+          out[id] = await lineItemsOf(entity, id, fields);
+          continue;
+        }
+        const items = connection.nodes.filter(Boolean);
+        out[id] = connection.pageInfo?.hasNextPage ? [...items, ...(await lineItemsOf(entity, id, fields, connection.pageInfo.endCursor))] : items;
+      }
+      return out;
+    },
+
     // { id, name } of the signed-in account; throws AuthError("session").
     async account() {
       return (await query("{ account { id name } }")).account;
