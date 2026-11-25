@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { AuthError, RequestError } from "../../extension/lib/hcp.js";
 import { ENTITIES, createJobberClient } from "../../extension/lib/jobber.js";
 import { createJobberExporter, linkExpiry } from "../../extension/lib/jobber-exporter.js";
+import { LINE_ITEMS_TEXT, leftOut, lineItemsText, subtotalCheck } from "../../extension/lib/line-items-text.js";
 import { memoryStore, unzip } from "./helpers.mjs";
 
 // A fetch that answers GraphQL queries with `answer(query)` and S3 links
@@ -140,7 +141,7 @@ test("exports every search page by page, and the files in a second zip", async (
 
   const { bytes: data, fileName } = await zipBytes(exporter.archive());
   assert.equal(fileName, "SHVR Export - Example Windows Co - 2026-11-16.zip");
-  assert.deepEqual(unzip(data, "jobs.csv").split("\r\n").slice(0, 2), ["\uFEFFid,jobNumber,title,client.id,client.name", "J1,101,Windows,C1,Ada"]);
+  assert.deepEqual(unzip(data, "jobs.csv").split("\r\n").slice(0, 2), ["\uFEFFid,jobNumber,title,client.id,client.name,Line items", "J1,101,Windows,C1,Ada,"]);
   assert.equal(unzip(data, "clients.csv"), "\uFEFFid,name,tags.nodes\r\nC1,Ada,\"[{\"\"label\"\":\"\"vip\"\"}]\"\r\n");
 
   const { bytes, fileName: attName } = await zipBytes(exporter.attachmentsArchive());
@@ -297,4 +298,77 @@ test("line items that can't be read are reported, and the export still finishes"
     "invoice,unavailable,0,0,Jobber answered with an error: no line items for you",
   ]);
   assert.equal(unzip(bytes, "job_line_items.csv").replace("\uFEFF", "").trim().split("\r\n").length, 2);
+});
+
+test("the Line items column lists a record's lines in position order, one per line", () => {
+  const rows = [
+    { position: "2", name: "Screens", quantity: "0", unitPrice: "5" },
+    { position: "10", name: "Discount", quantity: "1", unitPrice: "-20" },
+    { position: "1", name: "Window cleaning", quantity: "2", unitPrice: "75.5" },
+  ];
+  // Zero-quantity and negative lines are kept.
+  assert.equal(lineItemsText("jobs", rows), "Window cleaning (qty 2, unit price 75.5)\nScreens (qty 0, unit price 5)\nDiscount (qty 1, unit price -20)");
+  assert.equal(lineItemsText("jobs", rows, { ...LINE_ITEMS_TEXT, item: "{name}", separator: ", " }), "Window cleaning, Screens, Discount");
+  assert.equal(lineItemsText("jobs", []), "");
+});
+
+test("quotes leave out text-only lines and optional lines that weren't selected", () => {
+  const rows = [
+    { position: "1", name: "Maintenance Plans", textOnly: "true", optional: "false", selected: "" },
+    { position: "2", name: "Gold plan", quantity: "1", unitPrice: "30", textOnly: "false", optional: "true", selected: "true" },
+    { position: "3", name: "Silver plan", quantity: "1", unitPrice: "20", textOnly: "false", optional: "true", selected: "false" },
+    { position: "4", name: "Call-out", quantity: "1", unitPrice: "10", textOnly: "false", optional: "false", selected: "false" },
+  ];
+  assert.equal(lineItemsText("quotes", rows), "Gold plan (qty 1, unit price 30)\nCall-out (qty 1, unit price 10)");
+  // The same fields on a job line mean nothing: jobs keep every line.
+  assert.equal(leftOut("jobs", rows[0]), false);
+  // An optional line that doesn't say whether it was selected is kept.
+  assert.equal(leftOut("quotes", { optional: "true" }), false);
+});
+
+test("the subtotal check uses totalPrice as given and reports only records that don't add up", () => {
+  const quote = ENTITIES[2];
+  const record = { id: "Q1", quoteNumber: "7", "amounts.subtotal": "40" };
+  const lines = [
+    { name: "Gold plan", totalPrice: "30", optional: "true", selected: "true" },
+    { name: "Silver plan", totalPrice: "20", optional: "true", selected: "false" },
+    { name: "Discount", totalPrice: "-5.005" },
+    { name: "Free visit", totalPrice: "0", quantity: "0" },
+  ];
+  assert.deepEqual(subtotalCheck(quote, record, lines), { record_type: "quote", record_id: "Q1", record_number: "7", lines: "3", lines_left_out: "1", negative_lines: "1", line_total: "25.00", subtotal: "40.00", difference: "-15.00" });
+  assert.equal(subtotalCheck(quote, { ...record, "amounts.subtotal": "25" }, lines), null);
+  // Nothing to compare against, or a line with no price: not checked.
+  assert.equal(subtotalCheck(quote, { id: "Q2" }, lines), null);
+  assert.equal(subtotalCheck(quote, record, [{ name: "No price", totalPrice: "" }]), null);
+});
+
+test("jobs.csv and quotes.csv get the Line items column; the line item files stay", async () => {
+  const pages = {
+    jobs: [[{ id: "J1", jobNumber: 101, subtotal: 13 }, { id: "J2", jobNumber: 102, subtotal: 0 }]],
+    quotes: [[{ id: "Q1", quoteNumber: 7, amounts: { subtotal: 4 } }]],
+    invoices: [[{ id: "I1", invoiceNumber: 9, amounts: { subtotal: 2 } }]],
+  };
+  const lineItems = {
+    fields: ["id", "name", "quantity", "unitPrice", "totalPrice", "textOnly", "optional", "selected"],
+    items: {
+      J1: [{ id: "L1", name: "Clean, inside", quantity: 2, unitPrice: 1.5, totalPrice: 3 }, { id: "L2", name: "Screens", quantity: 1, unitPrice: 2, totalPrice: 2 }],
+      Q1: [{ id: "L3", name: "Plans", textOnly: true }, { id: "L4", name: "Gold", quantity: 1, unitPrice: 4, totalPrice: 4, optional: true, selected: true }, { id: "L5", name: "Silver", quantity: 1, unitPrice: 3, totalPrice: 3, optional: true, selected: false }],
+      I1: [{ id: "L6", name: "Gold", quantity: 1, unitPrice: 2, totalPrice: 2 }],
+    },
+  };
+  const exporter = exporterFor(memoryStore(), fakeClient(pages, {}, lineItems));
+  await exporter.start({ includeAttachments: false });
+  const { bytes } = await zipBytes(exporter.archive());
+
+  assert.equal(unzip(bytes, "jobs.csv"), '\uFEFFid,jobNumber,subtotal,Line items\r\nJ1,101,13,"Clean, inside (qty 2, unit price 1.5)\nScreens (qty 1, unit price 2)"\r\nJ2,102,0,\r\n');
+  assert.equal(unzip(bytes, "quotes.csv"), '\uFEFFid,quoteNumber,amounts.subtotal,Line items\r\nQ1,7,4,"Gold (qty 1, unit price 4)"\r\n');
+  // Invoices aren't in the setting, so invoices.csv is unchanged.
+  assert.equal(unzip(bytes, "invoices.csv"), "\uFEFFid,invoiceNumber,amounts.subtotal\r\nI1,9,2\r\n");
+  // Every line, left out or not, is still in the audit file.
+  assert.equal(unzip(bytes, "quote_line_items.csv").trim().split("\r\n").length, 4);
+  // Only J1 doesn't add up (5 against 13); the quote does once Silver is left out.
+  assert.deepEqual(unzip(bytes, "line_items_check.csv").replace("\uFEFF", "").trim().split("\r\n"), [
+    "record_type,record_id,record_number,lines,lines_left_out,negative_lines,line_total,subtotal,difference",
+    "job,J1,101,2,0,0,5.00,13.00,-8.00",
+  ]);
 });

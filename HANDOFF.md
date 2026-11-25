@@ -16,7 +16,7 @@ Read this before building the SHVR side. It covers what exists in this repo, wha
 | CLI export | `hcp_export.py` | Done. Writes `jobs.csv`, `materials.csv`, `miscellaneous_items.csv`, `estimates.csv` and `estimate_options.csv`, plus raw JSON, to `exports/`. |
 | Chrome extension | `extension/` | Done and tested end to end. Not yet on the Chrome Web Store. |
 | Web Store submission kit | `store/LISTING.md`, `store/PRIVACY.md`, `store/screenshot-running.png` | Ready apart from the open items below. |
-| Tests | `tests/extension/*.test.mjs`, `test_hcp_export.py`, `test_hcp_session.py` | `npm test` runs all of them: 46 node tests and 26 Python tests, all passing. |
+| Tests | `tests/extension/*.test.mjs`, `test_hcp_export.py`, `test_hcp_session.py` | `npm test` runs all of them: 50 node tests and 26 Python tests, all passing. |
 
 The audience is non-technical Housecall Pro operators. They can paste an API key, but they can't copy a browser cookie. That constraint is why the extension exists: it uses the browser's own Housecall Pro sign-in, so nobody handles the cookie.
 
@@ -79,6 +79,11 @@ All money is in dollars with two decimals; HCP sends cents. Every cost row carri
 The Jobber data zip adds, beside `jobs.csv`, `quotes.csv` and `invoices.csv`:
 
 - **`job_line_items.csv`, `quote_line_items.csv`, `invoice_line_items.csv`:** `<record>_id, <record>_number, position, line_item_id`, then every plain field Jobber's schema lists for that line item type, under Jobber's own field names. `<record>_id` joins to `id` in the record's CSV. `position` is the item's order on the record, from 1. Amounts are passed through as Jobber sends them.
+- **`Line items` column on `jobs.csv` and `quotes.csv`:** the record's lines as one cell of text, in `position` order, one item per line: `<name> (qty <quantity>, unit price <unitPrice>)`. This is the column SHVR's CRM Migration import reads (its Jobs template has a `Line items` text column); the line item files stay for audit. The header, the record files that get it, the item text and the separator are one setting, `LINE_ITEMS_TEXT` in `extension/lib/line-items-text.js`. Jobber's own report format for this column couldn't be confirmed, so the format is ours.
+  - Quotes leave out text-only lines (`textOnly`) and optional lines that weren't selected (`optional` true and `selected` false). Those field names are set in `QUOTE_LINE_FIELDS` in the same file; `optional` and `selected` are unconfirmed, so check them against the header of a real `quote_line_items.csv`. An optional line that doesn't say whether it was selected is kept.
+  - Lines with a zero quantity or a negative price are kept, on jobs and quotes.
+  - The export writes no dates in SHVR's template format; `createdAt`, `startAt` and the rest stay as Jobber sends them (ISO 8601).
+- **`line_items_check.csv`:** `record_type, record_id, record_number, lines, lines_left_out, negative_lines, line_total, subtotal, difference`. One row for each job, quote or invoice whose kept lines' `totalPrice` (used exactly as Jobber gave it) doesn't add up to the record's subtotal; only the header when everything adds up. A positive `difference` means the lines come to more than the subtotal.
 - **`line_items_status.csv`:** `record_type, status, records, line_items, error`. `status` is `complete`, `partial` (some pages were read, then Jobber refused) or `unavailable`. An importer should treat a line item file as authoritative only when its status is `complete`; an empty file with `complete` means no record had line items.
 
 ServiceTitan's line items come only as whatever its searches return.
